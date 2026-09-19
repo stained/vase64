@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VASE64 — base64, but it blooms</title>
+    <meta
+      name="description"
+      content="VASE64 encodes plain text to base64 and arranges the result as an ASCII vase. Decode a vase back to text."
+    />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🌷</text></svg>" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#artifact">Skip to the vase</a>
+
+    <main class="shell">
+      <!-- ---------------------------------------------------------------- -->
+      <!-- the vase is the page; everything else floats over it              -->
+      <!-- ---------------------------------------------------------------- -->
+      <section class="stage" aria-labelledby="output-heading">
+        <h2 class="visually-hidden" id="output-heading">Output</h2>
+
+        <!-- The id belongs to the container: it is the box the vase is fitted
+             into and filled by app.js. The <pre> inside it is just the paper. -->
+        <div class="artifact" id="artifact">
+          <pre class="artifact__text" tabindex="0" aria-live="polite"></pre>
+          <p class="artifact__empty" id="artifact-empty">Your vase will appear here.</p>
+        </div>
+
+        <p class="magnifier" id="magnifier" hidden></p>
+
+        <div class="bar bar--status">
+          <p class="status" id="status" role="status"></p>
+        </div>
+
+        <div class="bar bar--view">
+          <span class="brand" id="brand" aria-hidden="true">🌷 VASE64</span>
+          <button type="button" class="chip" id="zoom-out" title="Smaller">−</button>
+          <span class="chip chip--readout" id="zoom-readout">100%</span>
+          <button type="button" class="chip" id="zoom-in" title="Larger">+</button>
+          <label class="chip chip--check">
+            <input type="checkbox" id="fit" checked />
+            <span>Fit</span>
+          </label>
+          <label class="chip chip--check">
+            <input type="checkbox" id="gutter" />
+            <span>Numbers</span>
+          </label>
+          <button type="button" class="chip" id="copy">Copy</button>
+          <button type="button" class="chip" id="download">Download</button>
+          <button type="button" class="chip chip--menu" id="toggle-panel" aria-expanded="true" aria-controls="panel">
+            <span id="toggle-panel-label">Hide controls</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------------------- -->
+      <!-- the controls, floating above the vase                             -->
+      <!-- ---------------------------------------------------------------- -->
+      <aside class="panel" id="panel" aria-label="VASE64 controls">
+        <div class="modes" role="tablist" aria-label="Direction">
+          <button
+            type="button"
+            class="mode"
+            role="tab"
+            id="tab-encode"
+            aria-controls="panel"
+            aria-selected="true"
+            data-mode="encode"
+          >
+            Encode
+          </button>
+          <button
+            type="button"
+            class="mode"
+            role="tab"
+            id="tab-decode"
+            aria-controls="panel"
+            aria-selected="false"
+            data-mode="decode"
+          >
+            Decode
+          </button>
+        </div>
+
+        <p class="hint" id="input-hint">
+          Plain text in, vase out.
+        </p>
+
+        <label class="field">
+          <span class="field__label" id="input-label">Plain text</span>
+          <textarea
+            id="input"
+            class="field__area"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="Type something to plant…"
+            aria-describedby="input-hint"
+          ></textarea>
+        </label>
+
+        <div class="row">
+          <label class="control">
+            <span class="control__label">Vessel</span>
+            <select id="vessel" class="control__select"></select>
+          </label>
+          <label class="control control--check">
+            <input type="checkbox" id="breathing" checked />
+            <span>Breathing room</span>
+          </label>
+          <label class="control control--check">
+            <input type="checkbox" id="stamp" checked />
+            <span>Signature</span>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="button button--primary" id="run">Encode to vase</button>
+          <button type="button" class="button" id="sample">Sample</button>
+          <button type="button" class="button" id="clear">Clear</button>
+        </div>
+
+        <dl class="stats" id="stats">
+          <div class="stat"><dt>Chars</dt><dd id="stat-chars">0</dd></div>
+          <div class="stat"><dt>Bytes</dt><dd id="stat-bytes">0</dd></div>
+          <div class="stat"><dt>Blooms</dt><dd id="stat-glyphs">0</dd></div>
+          <div class="stat"><dt>Lines</dt><dd id="stat-lines">0</dd></div>
+        </dl>
+
+        <p class="note">
+          Encoding turns your text into UTF-8 bytes, then base64, then one plant per base64
+          character: <code>64 = 4 blooms × 4 stems × 4 leaf shapes</code>. Nothing about the vase
+          carries data, so redrawing it never loses a bit.
+        </p>
+
+        <details class="alphabet">
+          <summary>What each plant means</summary>
+          <pre id="alphabet-table" class="alphabet__table"></pre>
+        </details>
+
+        <p class="keys"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> run · <kbd>Esc</kbd> clear</p>
+      </aside>
+    </main>
+
+    <!--
+      The built index.html has this guard stripped out along with the banner:
+      it has nothing to warn about. Here it fires only when the dev page was
+      opened straight off disk, where ES modules are blocked as cross-origin.
+    -->
+    <p class="protocol" id="protocol" hidden>
+      <strong>This is the development page.</strong> It loads <code>app.js</code> as an ES
+      module, which browsers block on <code>file://</code>. Run <code>npm run serve</code>, or
+      open the built <code>index.html</code>, which has everything inlined and works from disk.
+    </p>
+    <script>
+      if (window.location.protocol === 'file:') {
+        document.getElementById('protocol').hidden = false;
+      }
+    </script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

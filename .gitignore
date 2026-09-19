@@ -1,0 +1,5 @@
+# Nothing here needs to be tracked, but editors and browsers leave droppings.
+.DS_Store
+Thumbs.db
+*.log
+node_modules/

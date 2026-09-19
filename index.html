@@ -1,0 +1,2243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VASE64 — base64, but it blooms</title>
+    <!-- Single file: no imports, no build step, no network. Just open it. -->
+    <meta
+      name="description"
+      content="VASE64 encodes plain text to base64 and arranges the result as an ASCII vase. Decode a vase back to text."
+    />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🌷</text></svg>" />
+    <style>
+/* VASE64 — the vase is the page.
+   The stage fills the viewport and the controls float over it, so a bouquet
+   gets every pixel it can use. Plain CSS: no framework, no build step, no
+   fonts to download. */
+
+:root {
+  --ink: #f2ecff;
+  --ink-dim: #b9aede;
+  --ink-faint: #8a7fb0;
+  --night: #100c1c;
+  --panel: rgba(30, 23, 51, 0.86);
+  --edge: #3a2e5e;
+  --bloom: #ff8fc7;
+  --leaf: #7ee0a8;
+  --sun: #ffd479;
+  /* Every column of every plant is one of these characters wide. If you change
+     this stack, change MONOSPACE_STACK in app.js to match: the app measures the
+     font and falls back if it turns out not to be monospaced. */
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas,
+    "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+
+  /* Live values, driven by the fit logic in app.js. */
+  --vase-size: 12px;
+  --vase-line: 1.18;
+  --gutter: 76px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 700px at 8% -10%, #2d2050 0%, transparent 60%),
+    radial-gradient(1000px 620px at 96% 4%, #1b2949 0%, transparent 55%),
+    var(--night);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* the stage owns all scrolling */
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 30;
+  background: var(--sun);
+  color: #241a00;
+  padding: 0.4rem 0.8rem;
+  border-radius: 0 0 8px 0;
+  font-size: 0.85rem;
+}
+
+.skip:focus {
+  left: 0;
+}
+
+/* ------------------------------------------------------------------- shell */
+
+.shell {
+  position: relative;
+  height: 100%;
+  isolation: isolate;
+}
+
+/* ------------------------------------------------------------------- stage */
+
+.stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.artifact {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: clamp(0.8rem, 2vw, 2rem);
+  /* A soft bloom behind the bouquet. */
+  background: radial-gradient(60% 55% at 50% 42%, rgba(255, 143, 199, 0.07), transparent 70%);
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) transparent;
+}
+
+.artifact__text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--vase-size);
+  line-height: var(--vase-line);
+  white-space: pre;
+  tab-size: 2;
+  color: var(--leaf);
+  min-width: max-content;
+  outline: none;
+}
+
+.artifact__text:focus-visible {
+  outline: 2px solid var(--sun);
+  outline-offset: 6px;
+  border-radius: 4px;
+}
+
+/* Blooms, stems, leaves and the vase each get a tint, so the plant reads at a
+   glance even when the vase is small. */
+.artifact__text .bloom,
+.artifact__text .stem,
+.artifact__text .leaf,
+.artifact__text .wall {
+  font-weight: 700;
+}
+
+.artifact__text .bloom {
+  color: var(--bloom);
+}
+
+.artifact__text .stem {
+  color: #6fe39d;
+}
+
+.artifact__text .leaf {
+  color: #4fbf85;
+}
+
+.artifact__text .wall {
+  color: var(--sun);
+}
+
+/* Line numbers live beside the vase, not inside it: they are absolute, so
+   turning them on cannot move a single column of the drawing. */
+.artifact .gutter {
+  position: absolute;
+  left: 0;
+  white-space: pre;
+  font-family: var(--mono);
+  font-size: 0.62em;
+  line-height: var(--vase-line);
+  color: #574d7d;
+  pointer-events: none;
+}
+
+.artifact__text .stamp {
+  color: var(--ink-faint);
+  letter-spacing: 0.24em;
+}
+
+.artifact__empty {
+  color: #6b6090;
+  font-size: 0.95rem;
+  margin: 0;
+  grid-area: 1 / 1;
+}
+
+.artifact:has(.artifact__text:not(:empty)) .artifact__empty {
+  display: none;
+}
+
+.magnifier {
+  margin: 0;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  padding: 0 0 0.3rem;
+}
+
+/* ------------------------------------------------------- floating furniture */
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem clamp(0.6rem, 1.6vw, 1rem);
+}
+
+.bar--status {
+  justify-content: center;
+  pointer-events: none;
+}
+
+.bar--view {
+  justify-content: center;
+  padding-bottom: 0.7rem;
+}
+
+.status {
+  margin: 0;
+  font-size: 0.82rem;
+  min-height: 1.3em;
+  color: var(--ink-dim);
+  text-align: center;
+  text-shadow: 0 1px 8px #000;
+}
+
+.status[data-tone="ok"] {
+  color: var(--leaf);
+}
+
+.status[data-tone="warn"] {
+  color: var(--sun);
+}
+
+.status[data-tone="bad"] {
+  color: #ff9a9a;
+}
+
+.brand {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin-right: 0.4rem;
+}
+
+.chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.chip:hover {
+  background: #2c2350;
+  border-color: #4d3f79;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--sun);
+  outline-offset: 2px;
+}
+
+.chip--readout {
+  min-width: 3.6rem;
+  justify-content: center;
+  color: var(--ink-dim);
+  cursor: default;
+}
+
+.chip--readout:hover {
+  background: var(--panel);
+  border-color: var(--edge);
+}
+
+.chip--check {
+  cursor: pointer;
+}
+
+.chip--check input {
+  accent-color: var(--bloom);
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+/* ------------------------------------------------------------------- panel */
+
+.panel {
+  position: absolute;
+  top: clamp(0.6rem, 1.6vw, 1.2rem);
+  left: clamp(0.6rem, 1.6vw, 1.2rem);
+  z-index: 10;
+  width: min(340px, calc(100% - 1.2rem));
+  max-height: calc(100% - 2rem);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.9rem;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow: 0 22px 50px -24px #000;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+/* Collapsed: the panel slides away and the view bar stays put. */
+.shell.panel-hidden .panel {
+  transform: translateX(calc(-100% - 2rem));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.modes {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  background: #170f2b;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  align-self: flex-start;
+}
+
+.mode {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.mode[aria-selected="true"] {
+  background: var(--bloom);
+  color: #2a0e20;
+  font-weight: 600;
+}
+
+.mode:focus-visible {
+  outline: 2px solid var(--sun);
+  outline-offset: 2px;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-dim);
+}
+
+.field {
+  display: block;
+}
+
+.field__label,
+.control__label {
+  display: block;
+  font-size: 0.68rem;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin-bottom: 0.3rem;
+}
+
+.field__area {
+  width: 100%;
+  height: 148px;
+  resize: vertical;
+  background: #150e27;
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 0.65rem;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.field__area::placeholder {
+  color: #6b6090;
+}
+
+.field__area:focus-visible,
+.control__select:focus-visible {
+  outline: 2px solid var(--sun);
+  outline-offset: 1px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1rem;
+  align-items: flex-end;
+}
+
+.control--check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.control--check input {
+  accent-color: var(--bloom);
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.control__select {
+  appearance: none;
+  background: #150e27;
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  padding: 0.4rem 1.9rem 0.4rem 0.55rem;
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-dim) 50%),
+    linear-gradient(135deg, var(--ink-dim) 50%, transparent 50%);
+  background-position: right 0.85rem center, right 0.5rem center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.button {
+  appearance: none;
+  font: inherit;
+  font-size: 0.84rem;
+  padding: 0.42rem 0.9rem;
+  border-radius: 9px;
+  border: 1px solid var(--edge);
+  background: #241b3d;
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+
+.button:hover {
+  background: #2e2350;
+}
+
+.button:active {
+  transform: translateY(1px);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--sun);
+  outline-offset: 2px;
+}
+
+.button--primary {
+  background: linear-gradient(180deg, #ff9fce, #ef6fb4);
+  border-color: #ffb9dd;
+  color: #2a0e20;
+  font-weight: 600;
+  flex: 1 1 auto;
+}
+
+.button--primary:hover {
+  background: linear-gradient(180deg, #ffb0d8, #f47cbc);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.stat {
+  background: #180f2c;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+}
+
+.stat dt {
+  font-size: 0.6rem;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+}
+
+.stat dd {
+  margin: 0.05rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.88rem;
+}
+
+.note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  border-top: 1px dashed var(--edge);
+  padding-top: 0.6rem;
+}
+
+.note code,
+.protocol code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  color: var(--leaf);
+}
+
+.alphabet summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+}
+
+.alphabet__table {
+  margin: 0.55rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  line-height: 1.32;
+  color: var(--ink-dim);
+  max-height: 220px;
+  overflow: auto;
+}
+
+.keys {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+
+.keys kbd {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  background: #1d1730;
+  border: 1px solid var(--edge);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0.05rem 0.3rem;
+}
+
+/* ----------------------------------------------------------------- protocol */
+
+.protocol {
+  position: fixed;
+  z-index: 40;
+  left: 50%;
+  bottom: 4.5rem;
+  transform: translateX(-50%);
+  width: min(620px, calc(100% - 2rem));
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  background: #3a2a10;
+  border: 1px solid var(--sun);
+  border-radius: 10px;
+  color: #ffe6b0;
+  font-size: 0.82rem;
+}
+
+/* ---------------------------------------------------------- small screens */
+
+@media (max-width: 780px) {
+  .panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: auto;
+    max-height: 62%;
+    border-radius: 16px 16px 0 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+  }
+
+  .shell.panel-hidden .panel {
+    transform: translateY(calc(100% + 2rem));
+  }
+
+  .field__area {
+    height: 92px;
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .protocol {
+    bottom: 0.8rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .chip,
+  .button {
+    transition: none;
+  }
+}
+
+/* Someone printing a vase probably wants the vase, not the chrome. */
+@media print {
+  body {
+    background: #fff;
+    color: #000;
+    overflow: visible;
+  }
+
+  .shell {
+    height: auto;
+  }
+
+  .stage {
+    position: static;
+  }
+
+  .panel,
+  .bar--view,
+  .bar--status,
+  .magnifier,
+  .skip,
+  .protocol {
+    display: none;
+  }
+
+  .artifact {
+    background: none;
+    overflow: visible;
+    padding: 0;
+    display: block;
+  }
+
+  .artifact__text {
+    font-size: 11px;
+    min-width: 0;
+  }
+
+  .artifact__text .bloom,
+  .artifact__text .stem,
+  .artifact__text .leaf,
+  .artifact__text .wall,
+  .artifact__text .stamp,
+  .artifact__text .gutter {
+    color: #000;
+  }
+}
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#artifact">Skip to the vase</a>
+
+    <main class="shell">
+      <!-- ---------------------------------------------------------------- -->
+      <!-- the vase is the page; everything else floats over it              -->
+      <!-- ---------------------------------------------------------------- -->
+      <section class="stage" aria-labelledby="output-heading">
+        <h2 class="visually-hidden" id="output-heading">Output</h2>
+
+        <!-- The id belongs to the container: it is the box the vase is fitted
+             into and filled by app.js. The <pre> inside it is just the paper. -->
+        <div class="artifact" id="artifact">
+          <pre class="artifact__text" tabindex="0" aria-live="polite"></pre>
+          <p class="artifact__empty" id="artifact-empty">Your vase will appear here.</p>
+        </div>
+
+        <p class="magnifier" id="magnifier" hidden></p>
+
+        <div class="bar bar--status">
+          <p class="status" id="status" role="status"></p>
+        </div>
+
+        <div class="bar bar--view">
+          <span class="brand" id="brand" aria-hidden="true">🌷 VASE64</span>
+          <button type="button" class="chip" id="zoom-out" title="Smaller">−</button>
+          <span class="chip chip--readout" id="zoom-readout">100%</span>
+          <button type="button" class="chip" id="zoom-in" title="Larger">+</button>
+          <label class="chip chip--check">
+            <input type="checkbox" id="fit" checked />
+            <span>Fit</span>
+          </label>
+          <label class="chip chip--check">
+            <input type="checkbox" id="gutter" />
+            <span>Numbers</span>
+          </label>
+          <button type="button" class="chip" id="copy">Copy</button>
+          <button type="button" class="chip" id="download">Download</button>
+          <button type="button" class="chip chip--menu" id="toggle-panel" aria-expanded="true" aria-controls="panel">
+            <span id="toggle-panel-label">Hide controls</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ---------------------------------------------------------------- -->
+      <!-- the controls, floating above the vase                             -->
+      <!-- ---------------------------------------------------------------- -->
+      <aside class="panel" id="panel" aria-label="VASE64 controls">
+        <div class="modes" role="tablist" aria-label="Direction">
+          <button
+            type="button"
+            class="mode"
+            role="tab"
+            id="tab-encode"
+            aria-controls="panel"
+            aria-selected="true"
+            data-mode="encode"
+          >
+            Encode
+          </button>
+          <button
+            type="button"
+            class="mode"
+            role="tab"
+            id="tab-decode"
+            aria-controls="panel"
+            aria-selected="false"
+            data-mode="decode"
+          >
+            Decode
+          </button>
+        </div>
+
+        <p class="hint" id="input-hint">
+          Plain text in, vase out.
+        </p>
+
+        <label class="field">
+          <span class="field__label" id="input-label">Plain text</span>
+          <textarea
+            id="input"
+            class="field__area"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="Type something to plant…"
+            aria-describedby="input-hint"
+          ></textarea>
+        </label>
+
+        <div class="row">
+          <label class="control">
+            <span class="control__label">Vessel</span>
+            <select id="vessel" class="control__select"></select>
+          </label>
+          <label class="control control--check">
+            <input type="checkbox" id="breathing" checked />
+            <span>Breathing room</span>
+          </label>
+          <label class="control control--check">
+            <input type="checkbox" id="stamp" checked />
+            <span>Signature</span>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="button button--primary" id="run">Encode to vase</button>
+          <button type="button" class="button" id="sample">Sample</button>
+          <button type="button" class="button" id="clear">Clear</button>
+        </div>
+
+        <dl class="stats" id="stats">
+          <div class="stat"><dt>Chars</dt><dd id="stat-chars">0</dd></div>
+          <div class="stat"><dt>Bytes</dt><dd id="stat-bytes">0</dd></div>
+          <div class="stat"><dt>Blooms</dt><dd id="stat-glyphs">0</dd></div>
+          <div class="stat"><dt>Lines</dt><dd id="stat-lines">0</dd></div>
+        </dl>
+
+        <p class="note">
+          Encoding turns your text into UTF-8 bytes, then base64, then one plant per base64
+          character: <code>64 = 4 blooms × 4 stems × 4 leaf shapes</code>. Nothing about the vase
+          carries data, so redrawing it never loses a bit.
+        </p>
+
+        <details class="alphabet">
+          <summary>What each plant means</summary>
+          <pre id="alphabet-table" class="alphabet__table"></pre>
+        </details>
+
+        <p class="keys"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> run · <kbd>Esc</kbd> clear</p>
+      </aside>
+    </main>
+    <script>
+/* VASE64 — generated by build.mjs. Edit src/vase64.js and app.js instead. */
+(function () {
+'use strict';
+
+// ---------------------------------------------------------------- codec
+/*!
+ * VASE64 - base64, but it blooms.
+ *
+ * The codec is deliberately tiny and dependency free so the same file can be
+ * loaded by the browser (as an ES module) and by node (tests + CLI).
+ *
+ * Encoding pipeline
+ * -----------------
+ *   text  ->  UTF-8 bytes  ->  standard base64  ->  one 2-row plant glyph
+ *                                                  per base64 character
+ *
+ * A glyph is 5 columns wide and 2 rows tall:
+ *
+ *      leaf   stem   bloom   stem   leaf      <- the bloom row carries the value
+ *        .    stem    .     stem    .        <- the body row makes it a plant
+ *
+ * The value is chopped into three independent 2-bit fields, which is what makes
+ * the mapping a bijection:
+ *
+ *      bits 4-5  (v >> 4)  bloom  -> o  O  *  @      (petals grow)
+ *      bits 2-3  (v >> 2)  stem   -> |:  !|  :|  !'
+ *      bits 0-1  (v)       leaves -> none  (  )  both
+ *
+ * Blooms, stems and leaves each draw from their own character set, so a row is
+ * unambiguous: two stems, one bloom, and whatever leaves survive editing. Only
+ * the bloom row is ever read back.
+ *
+ * Because every glyph is exactly 2 rows tall, the flower is a perfectly
+ * regular grid: plants sit side by side above the rim and a vase is drawn
+ * around them. Nothing about the vase carries data, so it can be redrawn,
+ * resized or thrown away without losing a single bit. That also means a vase
+ * with the frame stripped is still a valid VASE64 document.
+ */
+
+const BASE64_ALPHABET =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Value of a base64 character, or -1 when the character is not in the alphabet. */
+function base64Value(character) {
+  return BASE64_ALPHABET.indexOf(character);
+}
+
+/* -------------------------------------------------------------------------- */
+/* glyph table                                                                */
+/* -------------------------------------------------------------------------- */
+
+/** Column layout of a glyph: three leaf slots and the two stems between them. */
+const GLYPH_COLUMNS = 5;
+
+/** The four stems, in the order their codes are assigned. */
+const STEMS = ['|', '!', ':', "'"];
+
+/** The four blooms, in the order their codes are assigned: the tiers grow. */
+const BLOOMS = ['o', 'O', '*', '@'];
+
+/** Stems are grouped in pairs, selected by bits 2-3. */
+const STEM_STYLES = [['|', ':'], ['!', '|'], [':', '|'], ['!', "'"]];
+
+/** Leaf slots, indexed by bits 0-1. */
+const LEAF_MODES = [
+  { left: ' ', right: ' ' },
+  { left: '/', right: ' ' },
+  { left: ' ', right: '\\' },
+  { left: '/', right: '\\' },
+];
+
+/**
+ * Every character a plant row may contain. The vase is drawn only from lines
+ * (`|` `\` `/` `_`), so any row with exactly one bloom and two stems is a
+ * plant row and everything else in it is foliage. Only the bloom row carries
+ * data; the vine below it is decoration.
+ */
+const LEAVES = '/\\';
+const PLANT_ALPHABET = `${BLOOMS.join('')}${STEMS.join('')}${LEAVES}`;
+
+/**
+ * The character sets a plant is built from, as strings, for callers that want
+ * to colour or describe a vase. Exported so there is exactly one definition of
+ * them: the web app inlines this module into the same scope as itself, where a
+ * second `const BLOOMS` would be a hard syntax error.
+ */
+const BLOOM_CHARACTERS = BLOOMS.join('');
+const STEM_CHARACTERS = STEMS.join('');
+
+function buildGlyph(value) {
+  const bloom = BLOOMS[(value >> 4) & 0b11];
+  const leaf = LEAF_MODES[value & 0b11];
+  const [left, right] = STEM_STYLES[(value >> 2) & 0b11];
+  return [`${leaf.left}${left}${bloom}${right}${leaf.right}`, ` ${left} ${right} `];
+}
+
+/** value (0-63) -> the two rows of its plant, top row first. */
+const GLYPHS = Array.from({ length: 64 }, (_, value) => buildGlyph(value));
+
+/** The 64 glyphs joined as one string, used to spot structural collisions. */
+const GLYPH_SIGNATURES = GLYPHS.map((glyph) => glyph.join('\n'));
+
+const GLYPH_LOOKUP = new Map(GLYPHS.map((glyph, value) => [glyph.join('\n'), value]));
+const BLOOM_LOOKUP = new Map(BLOOMS.map((bloom, index) => [bloom, index]));
+// Each stem position carries its own two bits, so both positions have to be
+// read back before the pair can be turned into a style index: the table above
+// uses all four combinations (`|:` `!|` `:|` `!;`), and no linear combination
+// of two two-bit digits can invert that. Reading the pair through a table also
+// keeps `|o:` from collapsing into `!o:`.
+const STEM_LOOKUP = new Map(STEMS.map((stem, index) => [stem, index]));
+const STEM_PAIRS = new Map(
+  STEM_STYLES.map(([left, right], index) => [`${left}${right}`, index]),
+);
+const stemFromPair = (left, right) => {
+  const style = STEM_PAIRS.get(`${STEMS[left]}${STEMS[right]}`);
+  return style === undefined ? -1 : style;
+};
+
+/**
+ * Read a pair of rows back into a 6-bit value.
+ * @returns {number} 0-63, or -1 when the rows are not a glyph.
+ */
+function glyphToValue(topRow, bottomRow = '') {
+  const exact = GLYPH_LOOKUP.get(`${topRow}\n${bottomRow}`);
+  if (exact !== undefined) return exact;
+  return glyphToValueLenient(topRow);
+}
+
+/**
+ * Recover a value from a glyph whose leaves have been retouched or whose
+ * gutter collapsed. Blooms carry bits 4-5 (they are unique per glyph), stems
+ * carry bits 2-3, leaves are decorative enough to survive being mangled.
+ *
+ * @returns {number} 0-63, or -1 when no bloom / stem can be found.
+ */
+function glyphToValueLenient(row = '') {
+  let bloomIndex = -1;
+  const stems = [];
+  for (const character of row) {
+    const bloom = BLOOM_LOOKUP.get(character);
+    if (bloom !== undefined) {
+      if (bloomIndex !== -1) return -1; // two blooms in one row: not a glyph
+      bloomIndex = bloom;
+      continue;
+    }
+    if (STEM_LOOKUP.has(character)) stems.push(STEM_LOOKUP.get(character));
+  }
+  if (bloomIndex === -1 || stems.length !== 2) return -1;
+  const leaves = leafModeFromRow(row);
+  if (leaves === -1) return -1;
+  const style = stemFromPair(stems[0], stems[1]);
+  if (style === -1) return -1;
+  return (bloomIndex << 4) | (style << 2) | leaves;
+}
+
+/** Bits 0-1 as read off the leaves surrounding the bloom. */
+function leafModeFromRow(row) {
+  const bloomAt = row.search(/[oO*@]/);
+  if (bloomAt === -1) return -1;
+  const left = row.slice(0, bloomAt).includes('/');
+  const right = row.slice(bloomAt + 1).includes('\\');
+  if (left && right) return 0b11;
+  if (left) return 0b01;
+  if (right) return 0b10;
+  return 0b00;
+}
+
+/** Is this line the top half of a plant? */
+function isPlantRow(line = '') {
+  const planted = countPlants(line);
+  return planted.blooms === 1 && planted.stems === 2;
+}
+
+/** Count the blooms and stems on a line. */
+function countPlants(line = '') {
+  let blooms = 0;
+  let stems = 0;
+  for (const character of line) {
+    if (character === ' ') continue;
+    if (BLOOM_LOOKUP.has(character)) blooms += 1;
+    else if (STEM_LOOKUP.has(character)) stems += 1;
+  }
+  return { blooms, stems };
+}
+
+/**
+ * Does this line carry flowers? Only bloom rows do - the stem rows under them
+ * are decoration, and the vase has no blooms at all.
+ */
+function hasFlowers(line = '') {
+  for (const character of line) {
+    if (BLOOM_LOOKUP.has(character)) return true;
+  }
+  return false;
+}
+
+/**
+ * Split a flower row into individual glyphs.
+ *
+ * A row of flowers is a field, not a single plant: it packs as many glyphs as
+ * fit. Each bloom anchors one glyph - the stem before it, the two stems after
+ * it, and the leaves those stems carry - so a leaf overhanging from the next
+ * plant is picked up by that plant instead of confusing this one.
+ *
+ * @returns {Array<string>} one glyph per plant, left to right.
+ */
+function splitGlyphs(row = '') {
+  const glyphs = [];
+  let cursor = 0;
+  while (cursor < row.length) {
+    const bloomAt = findBloom(row, cursor);
+    if (bloomAt === -1) break;
+    const leftStem = findStemBefore(row, bloomAt, cursor);
+    if (leftStem === -1) {
+      cursor = bloomAt + 1;
+      continue;
+    }
+    // Every glyph is exactly GLYPH_COLUMNS wide, so the left stem fixes both
+    // edges: one column for the leaf to its left, and the bloom two along.
+    const start = Math.max(cursor, leftStem - 1);
+    glyphs.push(row.slice(start, start + GLYPH_COLUMNS));
+    cursor = start + GLYPH_COLUMNS;
+  }
+  return glyphs;
+}
+
+/** Index of the next bloom at or after `from`, or -1. */
+function findBloom(row, from) {
+  for (let index = from; index < row.length; index += 1) {
+    if (BLOOM_LOOKUP.has(row[index])) return index;
+  }
+  return -1;
+}
+
+/** Index of the stem belonging to the bloom at `bloomAt`, or -1. */
+function findStemBefore(row, bloomAt, from) {
+  for (let index = bloomAt - 1; index >= from; index -= 1) {
+    if (STEM_LOOKUP.has(row[index])) return index;
+  }
+  return -1;
+}
+
+/* -------------------------------------------------------------------------- */
+/* text <-> bytes                                                             */
+/* -------------------------------------------------------------------------- */
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: false });
+
+/* -------------------------------------------------------------------------- */
+/* the garden                                                                */
+/* -------------------------------------------------------------------------- */
+
+const DEFAULT_OPTIONS = Object.freeze({
+  /** Which shape to pour the flowers into. */
+  vessel: 'bud',
+  /** Leave a blank row between the flowers and the rim. */
+  breathingRoom: true,
+  /** Sign the work. */
+  stamp: true,
+});
+
+/* -------------------------------------------------------------------------- */
+/* vessels                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A vessel is a *curve*, not a picture.
+ *
+ * Each vessel lists a handful of control points - "at 40% of the height the
+ * vase is 7 columns wide" - and the art is generated from them. That is how
+ * ASCII art actually gets its shapes: you decide the silhouette, then pick a
+ * character per row from the *slope* of that silhouette, because `/` and `\`
+ * read as a diagonal and `_` reads as a horizontal edge.
+ *
+ *   `points`  [t, width] control points, t from 0 (rim) to 1 (base)
+ *   `steps`   how many rows the body is drawn over
+ *   `water`   t range that gets the `~` surface
+ *   `band`    t range that gets an `=` band
+ *   `pour`    row where the vase begins; flowers stack strictly above it, and
+ *             its width is the mouth the bouquet is poured through
+ *
+ * Two conventions make the result look right rather than merely correct:
+ *
+ *   * widths are forced odd, so every row has a centre column and the vase
+ *     stays symmetric as it is widened;
+ *   * `steps` is chosen so each row changes width by about two columns, which
+ *     is one column each side. On a text grid a cell is about twice as tall as
+ *     it is wide, so that finally makes a 45 degree slope look like 45 degrees.
+ */
+const VESSEL_PROFILES = {
+  bud: {
+    name: 'Bud vase',
+    blurb: 'A slim taper for short messages.',
+    points: [
+      [0.0, 15],
+      [0.55, 9],
+      [1.0, 7],
+    ],
+    steps: 11,
+    water: [0.6, 0.72],
+    band: [0.82, 0.92],
+    pour: 1,
+  },
+  bowl: {
+    name: 'Bowl',
+    blurb: 'A wide mouth that swallows long payloads.',
+    points: [
+      [0.0, 21],
+      [0.55, 15],
+      [1.0, 7],
+    ],
+    steps: 11,
+    water: [0.55, 0.66],
+    band: [0.76, 0.86],
+    pour: 1,
+  },
+  urn: {
+    name: 'Urn',
+    blurb: 'A tall body for the very long haul.',
+    points: [
+      [0.0, 13],
+      [0.22, 9],
+      [0.55, 17],
+      [1.0, 13],
+    ],
+    steps: 11,
+    water: [0.5, 0.6],
+    band: [0.72, 0.82],
+    pour: 1,
+  },
+};
+
+/* -------------------------------------------------------------------------- */
+/* drawing a curve as ASCII                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Interpolate the width at position `t` (0 at the rim, 1 at the base).
+ *
+ * The curve is a smoothstep between control points rather than a straight
+ * line: real vases curve, and a straight interpolation gives every row the
+ * same slope, which reads as a traffic cone.
+ */
+function widthAt(points, t) {
+  const clamped = Math.min(1, Math.max(0, t));
+  let before = points[0];
+  let after = points[points.length - 1];
+  for (let index = 1; index < points.length; index += 1) {
+    if (clamped <= points[index][0]) {
+      before = points[index - 1];
+      after = points[index];
+      break;
+    }
+  }
+  const span = after[0] - before[0];
+  const local = span === 0 ? 0 : (clamped - before[0]) / span;
+  const eased = local * local * (3 - 2 * local);
+  return before[1] + (after[1] - before[1]) * eased;
+}
+
+/** Force a width to odd, so the row has a centre column to sit on. */
+function oddWidth(width) {
+  const whole = Math.max(3, Math.round(width));
+  return whole % 2 === 0 ? whole - 1 : whole;
+}
+
+/**
+ * Pick a wall character from how far *that* wall moves between two rows.
+ *
+ * On a text grid a cell is about twice as tall as it is wide, so a diagonal
+ * covers about half a cell per row: one column of movement per row is already
+ * a fairly steep line, and anything more has to be drawn as a step. Each side
+ * is asked separately, because a vase that widens on the left and narrows on
+ * the right needs two different characters.
+ *
+ * `shift` is how far the wall moves *towards the axis* going down the vase, so
+ * a positive shift means the silhouette is closing in.
+ */
+function wallFor(shift, side) {
+  if (shift === 0) return '|';
+  const left = side === 'left';
+  if (shift > 0) return left ? '\\' : '/';
+  return left ? '/' : '\\';
+}
+
+/**
+ * Draw one vessel profile into a rectangular block of ASCII. Every row is
+ * padded out to the widest one, so the vase is symmetric about a fixed axis
+ * however the curve moves.
+ */
+function buildVesselArt(spec) {
+  const stepAt = (step) => (spec.steps === 1 ? 1 : step / (spec.steps - 1));
+
+  // Work out every row's width first, so each wall can be drawn from the step
+  // the drawing actually takes rather than from the ideal curve behind it.
+  //
+  // The steps are then limited to two columns (one per side). A character can
+  // only lean one column per row before it stops being a line, so a curve that
+  // asks for more than that would be drawn as a jump and the contour would
+  // break; clamping keeps the silhouette followable, at the cost of a slightly
+  // tighter curve than the control points asked for.
+  const widths = [];
+  for (let step = 0; step < spec.steps; step += 1) {
+    const wanted = oddWidth(widthAt(spec.points, stepAt(step)));
+    const previous = widths[step - 1];
+    widths.push(
+      previous === undefined ? wanted : Math.min(Math.max(wanted, previous - 2), previous + 2),
+    );
+  }
+
+  const natural = Math.max(...widths);
+  const centred = (width, body) =>
+    ' '.repeat((natural - width) / 2) + body + ' '.repeat((natural - width) / 2);
+
+  // Where a row of this width puts its left wall.
+  const wallAt = (width) => (natural - width) / 2;
+
+  // Above the body: the flared opening, then the lip the bouquet sits in.
+  const rim = oddWidth(widthAt(spec.points, 0));
+  const art = [centred(rim, `\\${' '.repeat(rim - 2)}/`), centred(rim, `|${' '.repeat(rim - 2)}|`)];
+
+  for (let step = 0; step < spec.steps; step += 1) {
+    const t = stepAt(step);
+    const width = widths[step];
+    const next = widths[Math.min(step + 1, spec.steps - 1)];
+    const last = step === spec.steps - 1;
+    // How far the silhouette moves towards its axis on the way to the next
+    // row: positive when the vase narrows, negative when it flares.
+    const shift = last ? 0 : wallAt(next) - wallAt(width);
+
+    let fill = ' ';
+    if (spec.water && t >= spec.water[0] && t <= spec.water[1]) fill = '~';
+    else if (spec.band && t >= spec.band[0] && t <= spec.band[1]) fill = '=';
+
+    // The base closes with a flat run of underscores.
+    const interior = (last ? '_' : fill).repeat(width - 2);
+    const left = last ? '\\' : wallFor(shift, 'left');
+    const right = last ? '_' : wallFor(shift, 'right');
+    art.push(centred(width, left + interior + right));
+  }
+  return art;
+}
+
+/** Build the art, the natural width and the rim from one profile. */
+function assembleVessel([key, spec]) {
+  const art = buildVesselArt(spec);
+  return [
+    key,
+    Object.freeze({
+      ...spec,
+      key,
+      art: Object.freeze(art),
+      naturalWidth: Math.max(...art.map((row) => row.length)),
+    }),
+  ];
+}
+
+/** The finished vessels: profile, art and natural width, all frozen. */
+const VESSELS = Object.freeze(
+  Object.fromEntries(Object.entries(VESSEL_PROFILES).map(assembleVessel)),
+);
+
+/** Vessel legend: what counts as a wall, and what has to be non-wall. */
+const WALL = /[|\\/_]/;
+
+/**
+ * Flatten a vessel template into rows of cells plus their walls.
+ */
+function parseVessel(vessel) {
+  return vessel.art.map((row) => {
+    const cells = [...row].map((character) => ({ character, wall: WALL.test(character) }));
+    const walls = [];
+    cells.forEach((cell, column) => {
+      if (cell.wall) walls.push(column);
+    });
+    return {
+      cells,
+      first: walls[0],
+      last: walls[walls.length - 1],
+      spans: walls.length > 0,
+    };
+  });
+}
+
+/**
+ * The span between a row's walls: none when the row has no walls, the gap when
+ * it has two, and the mirrored gap when a single wall is the whole row.
+ */
+function hollowSpan(row) {
+  if (!row.spans) return 0;
+  return row.first === row.last ? 2 * (row.first + 1) - 1 : row.last - row.first - 1;
+}
+
+/**
+ * The interior width a row has once the vase is `width` columns wide, plus the
+ * column its left wall lands on.
+ *
+ * Both edges are derived from the shared axis rather than from each other:
+ * scaling a left offset and a span separately lets the two round in opposite
+ * directions, which is what makes one side of a vase fatter than the other.
+ */
+function scaleRow(row, width, natural) {
+  const interior = Math.max(1, Math.round(hollowSpan(row) * (width / natural)));
+  // Odd interiors leave one centre column; even ones straddle it. Forcing odd
+  // keeps the two walls the same distance from the axis.
+  const span = interior % 2 === 1 ? interior : interior + 1;
+  // Centre the span on the axis rather than preserving the raw offsets: the
+  // drawing's own rows are not perfectly concentric, and scaling that
+  // irregularity is what makes a widened vase look lopsided.
+  const wall = Math.max(0, Math.floor((width - 1 - span) / 2));
+  return { span, wall };
+}
+
+/** The hollow span a row has once the vase is `width` columns wide. */
+function spanAt(row, width, natural) {
+  if (!row.spans) return 0;
+  return scaleRow(row, width, natural).span;
+}
+
+/**
+ * Draw one vase row `width` columns wide on the axis every row shares. The
+ * span is re-tiled with the row's own filler, so a water line stays a water
+ * line and a plain body row stays hollow.
+ */
+function buildVaseRow(row, width, natural) {
+  const padding = (content) =>
+    ' '.repeat(Math.max(0, Math.round((width - content.length) / 2))) + content;
+
+  // A row with no walls is decoration: centre it and leave the rest to the
+  // rows above and below, which do have walls.
+  if (!row.spans) return padding(row.cells.map((cell) => cell.character).join(''));
+  // A row that narrows to one column is that column, bled out across the crop.
+  if (row.first === row.last) return row.cells[row.first].character.repeat(Math.max(1, width));
+
+  const { span, wall } = scaleRow(row, width, natural);
+  const filler = row.cells
+    .slice(row.first + 1, row.last)
+    .map((cell) => cell.character)
+    .filter((character) => character !== ' ');
+  const interior = [];
+  for (let index = 0; index < span; index += 1) {
+    interior.push(filler.length === 0 ? ' ' : filler[index % filler.length]);
+  }
+  return (
+    ' '.repeat(wall) +
+    row.cells[row.first].character +
+    interior.join('') +
+    row.cells[row.last].character
+  );
+}
+
+const BED = Object.freeze({
+  /** One glyph plus a column of elbow room. */
+  min: GLYPH_COLUMNS + 2,
+  /** Where a short message stops growing the vase. */
+  default: 25,
+  /** Hard ceiling, in columns, for the whole canvas. */
+  max: 121,
+  /** How much bed each extra row of flowers buys. */
+  perRow: 2,
+});
+
+/**
+ * Turn base64 text into an ASCII vase.
+ *
+ * @param {string} base64
+ * @param {object} [options]
+ * @returns {string}
+ */
+function base64ToVase(base64, options = {}) {
+  const config = { ...DEFAULT_OPTIONS, ...options };
+  if (typeof base64 !== 'string') throw new TypeError('base64ToVase expects a string');
+  const vessel = VESSELS[config.vessel ?? 'bud'];
+  if (!vessel) {
+    throw new Error(
+      `VASE64: unknown vessel "${config.vessel}" (try ${Object.keys(VESSELS).join(', ')})`,
+    );
+  }
+
+  const values = [];
+  for (const character of base64) {
+    if (character === '=' || character === '\n' || character === '\r') continue;
+    const value = base64Value(character);
+    if (value === -1) {
+      throw new Error(`VASE64: "${character}" is not a base64 character`);
+    }
+    values.push(value);
+  }
+
+  const rows = parseVessel(vessel);
+  const natural = vessel.naturalWidth;
+  const rim = rows[vessel.pour];
+
+  // The flower bed is the canvas everything else is measured against. It grows
+  // with the message, which both keeps a big bouquet from becoming a single
+  // endless column and widens the vase it is poured into.
+  const rowsWanted = Math.ceil(values.length / GLYPH_COLUMNS);
+  const bedWidth = Math.max(
+    BED.min,
+    Math.min(BED.default + Math.max(0, rowsWanted - 1) * BED.perRow, BED.max),
+  );
+  const columns = Math.max(1, Math.floor(bedWidth / GLYPH_COLUMNS));
+  // One column of vase on either side: the bouquet overhangs its rim the way a
+  // real one does, and the widest rows still line up under it. An odd canvas
+  // width has a single centre column, which is what lets every row of the vase
+  // centre on the same axis exactly.
+  const evenBed = bedWidth + 2;
+  const width = evenBed % 2 === 1 ? evenBed : evenBed + 1;
+  // Flowers are placed on that same axis, not against their own left edge.
+  // Flooring the half-column is what keeps an even-width row of flowers and an
+  // odd-width vase row on the identical centre column.
+  const axis = (width - 1) / 2;
+  const place = (content) =>
+    ' '.repeat(Math.max(0, Math.floor(axis - (content.length - 1) / 2))) + content;
+
+  const lines = [];
+  for (let start = 0; start < values.length; start += columns) {
+    const chunk = values.slice(start, start + columns);
+    const top = [];
+    const bottom = [];
+    for (const value of chunk) {
+      const glyph = GLYPHS[value];
+      top.push(glyph[0]);
+      bottom.push(glyph[1]);
+    }
+    // `place` centres each row on the vase's axis, which is what makes a short
+    // final row finish the bouquet instead of leaning to one side. Adding any
+    // padding here as well would centre it twice and push it off-axis.
+    lines.push(place(top.join('')).trimEnd());
+    lines.push(place(bottom.join('')).trimEnd());
+  }
+
+  if (config.breathingRoom && values.length > 0) lines.push('');
+
+  // buildVaseRow aligns each row on the axis itself, so nothing is padded
+  // twice. The stamp is what gives the canvas its margin, so a wide vase that
+  // fills the stage still sits clear of the floating panel.
+  for (const row of rows) lines.push(buildVaseRow(row, width, natural).trimEnd());
+
+  if (config.stamp) {
+    lines.push('');
+    const signature = 'VASE64';
+    lines.push(place(signature));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Pull the base64 back out of a vase.
+ *
+ * Blank lines, the vase outline, line-number gutters and the stamp are all
+ * ignored; only the bloom rows contribute data, and each row may hold many
+ * plants.
+ *
+ * @param {string} vase
+ * @returns {string} base64 (unpadded, as stored)
+ */
+function vaseToBase64(vase) {
+  if (typeof vase !== 'string') throw new TypeError('vaseToBase64 expects a string');
+  let base64 = '';
+  for (const rawLine of vase.split(/\r?\n/)) {
+    const line = stripGutter(rawLine).replace(/\s+$/, '');
+    for (const glyph of splitGlyphs(line)) {
+      const value = glyphToValueLenient(glyph);
+      if (value !== -1) base64 += BASE64_ALPHABET[value];
+    }
+  }
+  return base64;
+}
+
+/** Drop a leading `12 | ` gutter when one is present. */
+function stripGutter(line) {
+  return line.replace(/^\s*\d+\s*[|│]\s?/, '');
+}
+
+/* -------------------------------------------------------------------------- */
+/* public API                                                                 */
+/* -------------------------------------------------------------------------- */
+
+function encodeToVase(text, options = {}) {
+  const bytes = textEncoder.encode(String(text ?? ''));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const base64 = typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(bytes).toString('base64');
+  return base64ToVase(base64, options);
+}
+
+function decodeVase(vase) {
+  return decodeBase64(vaseToBase64(vase));
+}
+
+function decodeBase64(base64) {
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+  const binary = typeof atob === 'function'
+    ? atob(padded)
+    : Buffer.from(padded, 'base64').toString('binary');
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return textDecoder.decode(bytes);
+}
+
+/** How many glyphs a vase document holds. */
+function countGlyphs(vase) {
+  return vaseToBase64(vase).length;
+}
+
+/**
+ * Check a document without decoding it. Useful for the UI's live status line.
+ *
+ * @returns {{ok: boolean, glyphs: number, problems: Array<{line: number, message: string}>}}
+ */
+function inspectVase(vase) {
+  const problems = [];
+  let glyphs = 0;
+  const lines = String(vase ?? '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = stripGutter(lines[index]).replace(/\s+$/, '');
+    if (!hasFlowers(line)) continue;
+    const found = splitGlyphs(line);
+    if (found.length === 0) {
+      problems.push({ line: index + 1, message: 'carries a bloom but no complete plant' });
+      continue;
+    }
+    let readable = 0;
+    for (const glyph of found) {
+      if (glyphToValueLenient(glyph) === -1) {
+        problems.push({
+          line: index + 1,
+          message: `could not read a 6-bit value from ${JSON.stringify(glyph)}`,
+        });
+      } else {
+        readable += 1;
+      }
+    }
+    glyphs += readable;
+  }
+  return { ok: problems.length === 0 && glyphs > 0, glyphs, problems };
+}
+
+/** The garden, as text. Handy for docs, tests and the UI's help panel. */
+function glyphTable() {
+  return GLYPHS.map((glyph, value) => {
+    const bits = value.toString(2).padStart(6, '0');
+    return `${String(value).padStart(2)} ${BASE64_ALPHABET[value]} ${bits}  ${glyph[0]}  ${glyph[1]}`;
+  }).join('\n');
+}
+
+// ------------------------------------------------------------------ app
+/**
+ * VASE64 web bench.
+ *
+ * The page is a thin skin over src/vase64.js: it decides which way the data is
+ * flowing, keeps the two text areas in step, and paints the result. The codec
+ * itself knows nothing about the DOM, which is why the same module backs the
+ * CLI and the tests.
+ */
+
+/** Character classes for the highlighter, longest match first. */
+const CLASSES = [
+  { name: 'bloom', characters: BLOOM_CHARACTERS },
+  { name: 'stem', characters: STEM_CHARACTERS },
+  { name: 'leaf', characters: LEAVES },
+  { name: 'wall', characters: '|\\/_' },
+];
+
+/** Every column of every plant is exactly this wide; the art depends on it. */
+const MONOSPACE_STACK = [
+  'ui-monospace',
+  'SFMono-Regular',
+  'SF Mono',
+  'Menlo',
+  'Monaco',
+  'Consolas',
+  'DejaVu Sans Mono',
+  'Liberation Mono',
+  'Courier New',
+  'monospace',
+];
+
+const SAMPLE = `VASE64: base64, but it blooms.
+
+Type anything you like in here and press "Encode to vase". Every base64
+character becomes one plant, so the same text always grows the same bouquet.`;
+
+const $ = (id) => document.getElementById(id);
+
+const dom = {
+  tabs: [...document.querySelectorAll('.mode')],
+  inputLabel: $('input-label'),
+  inputHint: $('input-hint'),
+  input: $('input'),
+  vessel: $('vessel'),
+  breathing: $('breathing'),
+  stamp: $('stamp'),
+  run: $('run'),
+  sample: $('sample'),
+  clear: $('clear'),
+  artifact: $('artifact'),
+  artText: document.querySelector('.artifact__text'),
+  shell: document.querySelector('.shell'),
+  panel: $('panel'),
+  magnifier: $('magnifier'),
+  copy: $('copy'),
+  download: $('download'),
+  gutter: $('gutter'),
+  fit: $('fit'),
+  zoomIn: $('zoom-in'),
+  zoomOut: $('zoom-out'),
+  zoomReadout: $('zoom-readout'),
+  togglePanel: $('toggle-panel'),
+  togglePanelLabel: $('toggle-panel-label'),
+  status: $('status'),
+  alphabet: $('alphabet-table'),
+  stats: {
+    chars: $('stat-chars'),
+    bytes: $('stat-bytes'),
+    glyphs: $('stat-glyphs'),
+    lines: $('stat-lines'),
+  },
+};
+
+const state = {
+  mode: 'encode',
+  vase: '',
+  base64: '',
+  message: '',
+  /** Multiplier on the fitted size: 1 = exactly fit, 1.5 = half again. */
+  zoom: 1,
+  /** Set during setup: whether the rendering font really is monospaced. */
+  monospaced: true,
+  fit: true,
+  panelOpen: true,
+};
+
+/** Font sizes the +/- control steps through. */
+const ZOOM_DEFAULT = 12;
+/** Hard limits on the rendered font size, whatever the stage says. */
+const ZOOM_MIN = 5;
+const ZOOM_MAX = 48;
+/** How far the hand-picked zoom may travel from an exact fit. */
+const ZOOM_MIN_RATIO = 0.5;
+const ZOOM_MAX_RATIO = 3;
+/** Room left around the vase, in px, so it never touches the furniture. */
+const STAGE_BREATHING = 28;
+/** The bars that sit under the vase, so the bouquet does not hide behind them. */
+const FURNITURE_HEIGHT = 104;
+
+/* -------------------------------------------------------------------------- */
+/* setup                                                                      */
+/* -------------------------------------------------------------------------- */
+
+function fillVessels() {
+  // The dev page loads this file as a module, so reaching this function means
+  // the module loaded and the page works, whatever the protocol. Clear the
+  // fallback warning dev.html raised in case it did not.
+  const protocolWarning = $('protocol');
+  if (protocolWarning) protocolWarning.hidden = true;
+
+  for (const [key, vessel] of Object.entries(VESSELS)) {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = `${vessel.name} — ${vessel.blurb}`;
+    dom.vessel.append(option);
+  }
+  dom.vessel.value = 'bud';
+}
+
+function fillAlphabet() {
+  const table = glyphTable();
+  dom.alphabet.textContent = `${table}
+
+Legend
+  bloom  ${[...BLOOM_CHARACTERS].join('  ')}   the top two bits
+  stem   ${[...STEM_CHARACTERS].join('  ')}   the middle two bits, two per plant
+  leaf   ${[...LEAVES].join('  ')}   the bottom two bits
+  Each plant is two rows deep. Only the bloom row carries data; the vine
+  underneath it is decoration, which is why the vase can be redrawn freely.`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* rendering                                                                  */
+/* -------------------------------------------------------------------------- */
+
+function classOf(character) {
+  for (const entry of CLASSES) {
+    if (entry.characters.includes(character)) return entry.name;
+  }
+  return '';
+}
+
+/**
+ * Colour a vase without letting HTML escape the art. Characters are matched
+ * char-by-char, and runs are wrapped in spans so the flower reads at a glance.
+ *
+ * The gutter is emitted as its own block element at the start of each line: as
+ * a block it takes no width in the <pre>, so switching line numbers on cannot
+ * nudge the vase sideways.
+ */
+function highlight(text) {
+  const lines = text.split('\n');
+  const parts = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    let run = '';
+    let runClass = null;
+    for (const character of line) {
+      const name = classOf(character);
+      if (name !== runClass) {
+        if (run) parts.push(wrap(run, runClass));
+        run = character;
+        runClass = name;
+      } else {
+        run += character;
+      }
+    }
+    if (run) parts.push(wrap(run, runClass));
+    if (index < lines.length - 1) parts.push('\n');
+  }
+  return parts.join('');
+}
+
+/** The signature is a marker, not a plant, so it gets one clean span. */
+function markSignature(html) {
+  return html.replace(/>VASE64</g, '><span class="stamp">VASE64</span><');
+}
+
+function wrap(text, className) {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return className ? `<span class="${className}">${escaped}</span>` : escaped;
+}
+
+function render() {
+  // Decoding paints the recovered text; encoding paints the vase. Either way
+  // the panel shows the thing you asked for, not an intermediate.
+  const text = state.mode === 'encode' ? state.vase : state.message;
+  // `VASE64` never contains a bloom, so its O would otherwise be tinted.
+  const lines = text ? text.split('\n') : [];
+  const gutters = dom.gutter.checked
+    ? lines.map((_, index) => `<i class="gutter">${String(index + 1).padStart(3, ' ')}</i>`).join('')
+    : '';
+  dom.artifact.innerHTML =
+    `<pre class="artifact__text" tabindex="0" aria-live="polite">${markSignature(highlight(text, false))}</pre>` +
+    gutters +
+    '<p class="artifact__empty" id="artifact-empty">Your vase will appear here.</p>';
+  // The panel may have been swapped out from under the older references.
+  dom.artText = dom.artifact.querySelector('.artifact__text');
+  dom.artifactEmpty = $('artifact-empty');
+  fitToStage();
+}
+
+/* -------------------------------------------------------------------------- */
+/* fitting the vase to the stage                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * How wide one monospace column is, and how tall one line is, per pixel of
+ * font size.
+ *
+ * The probe is deliberately many lines tall - a one-line element measures a
+ * single line, which says nothing about the line height - and it is fixed
+ * positioned with `width: max-content`, so its size is its text's size and not
+ * a function of the page layout it happens to be measured in. Reaching into a
+ * collapsing flex layout for metrics is how the vase ends up sized wrong.
+ */
+const PROBE_SIZE = 100;
+const PROBE_LINES = 40;
+const PROBE_TEXT = new Array(PROBE_LINES).fill('0'.repeat(40)).join('\n');
+
+function measure() {
+  const probe = document.createElement('pre');
+  probe.className = 'artifact__text';
+  probe.style.cssText = [
+    'position:fixed',
+    'top:0',
+    'left:-9999px',
+    'width:max-content',
+    'height:auto',
+    'visibility:hidden',
+    'pointer-events:none',
+    `font-size:${PROBE_SIZE}px`,
+    'margin:0',
+    'padding:0',
+    'border:0',
+  ].join(';');
+  probe.textContent = PROBE_TEXT;
+  document.body.append(probe);
+  const rect = probe.getBoundingClientRect();
+  probe.remove();
+  // Divide by the probe's own font size, so this holds whatever size it is
+  // measured at.
+  return {
+    column: rect.width / 40 / PROBE_SIZE,
+    line: rect.height / PROBE_LINES / PROBE_SIZE,
+  };
+}
+
+/**
+ * The box the vase may actually occupy. The controls float *over* the stage, so
+ * on a wide screen their strip is subtracted off the left; below the stacking
+ * breakpoint they sit underneath instead and the width is the whole stage.
+ */
+function stageBox() {
+  const rect = dom.artifact.getBoundingClientRect();
+  const style = getComputedStyle(dom.artifact);
+  const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  let width = rect.width - padding;
+  let height = rect.height;
+
+  const panelRect = dom.panel.getBoundingClientRect();
+  // On a narrow screen the stylesheet stacks the panel across the bottom, in
+  // which case it costs height rather than width. Beside the vase it costs
+  // width, but never more than two thirds of the stage: past that the panel
+  // would leave the bouquet nothing, so the vase keeps its room and slides
+  // under the controls instead.
+  const panelAtBottom = rect.bottom - panelRect.bottom < 24 && panelRect.width > rect.width * 0.8;
+  if (state.panelOpen && panelRect.width > 0) {
+    if (panelAtBottom) {
+      height -= panelRect.height;
+    } else {
+      width -= Math.min(panelRect.width + STAGE_BREATHING, rect.width * (2 / 3));
+    }
+  }
+
+  return {
+    width: Math.max(0, width - STAGE_BREATHING),
+    height: Math.max(0, height - FURNITURE_HEIGHT - STAGE_BREATHING),
+  };
+}
+
+/** The largest font size at which the whole vase fits, within the zoom range. */
+function fitSize() {
+  const text = state.mode === 'encode' ? state.vase : state.message;
+  if (!text) return ZOOM_DEFAULT;
+  const { width, height } = stageBox();
+  if (width <= 0 || height <= 0) return ZOOM_DEFAULT;
+  const { column, line } = measure();
+  const columns = Math.max(...text.split('\n').map((row) => row.length));
+  const rows = text.split('\n').length;
+  const byWidth = width / (columns * column);
+  const byHeight = height / (rows * line);
+  return clamp(Math.min(byWidth, byHeight), ZOOM_MIN, ZOOM_MAX);
+}
+
+/**
+ * Push the current size into CSS and report it. `fit` is what the stage can
+ * hold; the hand-picked zoom is a multiplier on top of that, so a resize keeps
+ * a zoomed-in vase zoomed in rather than snapping it back to a fixed pixel size.
+ */
+function applySize(fit) {
+  const size = Math.round(clamp(fit * state.zoom, ZOOM_MIN, ZOOM_MAX) * 10) / 10;
+  document.documentElement.style.setProperty('--vase-size', `${size}px`);
+  dom.zoomReadout.textContent = `${Math.round(state.zoom * 100)}%`;
+  dom.zoomIn.disabled = state.zoom >= ZOOM_MAX_RATIO;
+  dom.zoomOut.disabled = state.zoom <= ZOOM_MIN_RATIO;
+}
+
+function fitToStage() {
+  const fit = fitSize();
+  lastFit = state.fit ? Math.round(fit * 10) / 10 : null;
+  applySize(fit);
+}
+
+/** Step the zoom by hand, which also switches fit off. */
+function zoomStep(direction) {
+  // One step is a fixed fraction, so the control feels the same at any size.
+  const next = state.zoom * (direction > 0 ? 1.25 : 1 / 1.25);
+  state.zoom = clamp(next, ZOOM_MIN_RATIO, ZOOM_MAX_RATIO);
+  state.fit = false;
+  dom.fit.checked = false;
+  fitToStage();
+}
+
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+
+function setPanel(open) {
+  state.panelOpen = open;
+  dom.shell.classList.toggle('panel-hidden', !open);
+  dom.togglePanel.setAttribute('aria-expanded', String(open));
+  dom.togglePanelLabel.textContent = open ? 'Hide controls' : 'Show controls';
+  if (state.fit) fitToStage();
+}
+
+/* -------------------------------------------------------------------------- */
+/* the font has to be monospaced for any of this to line up                   */
+/* -------------------------------------------------------------------------- */
+
+/** The characters the art is built from, plus a reference letter and a gap. */
+const FONT_PROBE = ['M', 'i', 'W', '.', ' ', '|', 'o'];
+
+/**
+ * Is the font actually monospaced? A proportional fallback would let every
+ * column drift, so this is checked rather than assumed.
+ *
+ * Widths come from a 2D canvas, because it reports a character's advance
+ * width directly instead of the ink extents a <pre> would give.
+ */
+function fontIsMonospaced() {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext?.('2d');
+  if (!context) return true; // no canvas: assume the stylesheet is right
+  const family = MONOSPACE_STACK.map((name) => (name.includes(' ') ? `"${name}"` : name)).join(', ');
+  context.font = `50px ${family}`;
+  const widths = FONT_PROBE.map((character) => context.measureText(character).width);
+  return widths.every((width) => Math.abs(width - widths[0]) < 0.5);
+}
+
+/**
+ * Make sure the vase is drawn in a monospaced font. The stylesheet already asks
+ * for one; this checks, and if the answer is no it forces a fallback and checks
+ * again, so the app never quietly draws a crooked vase.
+ *
+ * @returns {boolean} whether the vase is being drawn monospaced.
+ */
+function ensureMonospaced() {
+  if (fontIsMonospaced()) return true;
+
+  const forced = document.createElement('style');
+  forced.textContent =
+    '.artifact__text { font-family: "Courier New", Courier, ui-monospace, monospace !important; }';
+  document.head.append(forced);
+  return fontIsMonospaced();
+}
+
+function setStatus(message, tone = '') {
+  dom.status.textContent = message;
+  if (tone) dom.status.dataset.tone = tone;
+  else delete dom.status.dataset.tone;
+}
+
+function updateStats() {
+  const source = dom.input.value;
+  const showing = state.mode === 'encode' ? state.vase : state.message;
+  const encoding = state.mode === 'encode';
+  dom.stats.chars.textContent = String(source.length);
+  dom.stats.bytes.textContent = String(new TextEncoder().encode(encoding ? source : showing).length);
+  dom.stats.glyphs.textContent = String(
+    encoding ? state.base64.length : splitGlyphs(state.vase).length,
+  );
+  dom.stats.lines.textContent = String(showing ? showing.split('\n').length : 0);
+}
+
+/* -------------------------------------------------------------------------- */
+/* the two directions                                                         */
+/* -------------------------------------------------------------------------- */
+
+function encode() {
+  const text = dom.input.value;
+  if (!text) {
+    state.base64 = '';
+    state.vase = '';
+    render();
+    updateStats();
+    setStatus('Nothing to plant yet.', 'warn');
+    return;
+  }
+  state.message = text;
+  state.base64 = bytesToBase64(text);
+  state.vase = base64ToVase(state.base64, {
+    vessel: dom.vessel.value,
+    breathingRoom: dom.breathing.checked,
+    stamp: dom.stamp.checked,
+  });
+  render();
+  updateStats();
+  reportVase(state.vase, state.base64.length);
+}
+
+function decode() {
+  const source = dom.input.value;
+  if (!source.trim()) {
+    state.base64 = '';
+    state.vase = '';
+    render();
+    updateStats();
+    setStatus('Paste a vase to decode.', 'warn');
+    return;
+  }
+
+  const looksLikeVase = source.split('\n').some(hasFlowers);
+  if (looksLikeVase) {
+    state.base64 = vaseToBase64(source);
+    state.vase = source;
+  } else {
+    // Accept plain base64 too: it is the middle step, so people paste it.
+    state.base64 = source.replace(/\s+/g, '').replace(/=+$/, '');
+    state.vase = base64ToVase(state.base64, {
+      vessel: dom.vessel.value,
+      breathingRoom: dom.breathing.checked,
+      stamp: dom.stamp.checked,
+    });
+  }
+
+  if (!state.base64) {
+    setStatus('No flowers or base64 found in that input.', 'bad');
+    return;
+  }
+
+  try {
+    state.message = decodeBase64(state.base64);
+  } catch {
+    setStatus('That vase could not be decoded — the base64 inside is not valid.', 'bad');
+    return;
+  }
+
+  render();
+  updateStats();
+  const roundTrip = bytesToBase64(state.message) === state.base64;
+  setStatus(
+    roundTrip
+      ? `Decoded ${state.base64.length} base64 characters back to text.`
+      : `Decoded ${state.base64.length} characters (the payload was not a whole number of bytes).`,
+    roundTrip ? 'ok' : 'warn',
+  );
+}
+
+function reportVase(vase, glyphs) {
+  const lines = vase.split('\n');
+  const examined = Math.min(lines.length, 400);
+  let bad = 0;
+  for (let index = 0; index < examined; index += 1) {
+    if (!hasFlowers(lines[index])) continue;
+    for (const glyph of splitGlyphs(lines[index])) {
+      // Ask the codec, not a string comparison: a final plant in a row can be
+      // trimmed by a trailing space and still be perfectly readable.
+      if (glyphToValueLenient(glyph) === -1) bad += 1;
+    }
+  }
+  const planted = `${glyphs} base64 characters planted`;
+  if (!state.monospaced) {
+    setStatus(
+      `${planted}, but this browser has no monospaced font, so the columns will not line up.`,
+      'warn',
+    );
+  } else if (bad > 0) {
+    setStatus(`${planted}, but ${bad} plant${bad === 1 ? '' : 's'} look damaged.`, 'warn');
+  } else {
+    setStatus(`${planted} — ${text(dom.input.value)}.`, 'ok');
+  }
+}
+
+/** "12 bytes of text over 3 lines", for the status line. */
+function text(input) {
+  const bytes = new TextEncoder().encode(input).length;
+  const lines = input.split('\n').length;
+  return `${bytes} byte${bytes === 1 ? '' : 's'} of text over ${lines} line${lines === 1 ? '' : 's'}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* base64 helpers (browser side)                                              */
+/* -------------------------------------------------------------------------- */
+
+function bytesToBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/* -------------------------------------------------------------------------- */
+/* chrome                                                                     */
+/* -------------------------------------------------------------------------- */
+
+function setMode(mode) {
+  state.mode = mode;
+  for (const tab of dom.tabs) {
+    tab.setAttribute('aria-selected', String(tab.dataset.mode === mode));
+  }
+  const decoding = mode === 'decode';
+  dom.inputLabel.textContent = decoding ? 'Vase' : 'Plain text';
+  dom.input.placeholder = decoding ? 'Paste a vase (or some base64)…' : 'Type something to plant…';
+  dom.run.textContent = decoding ? 'Decode vase' : 'Encode to vase';
+  dom.inputHint.textContent = decoding
+    ? 'A vase in, text out. Outlines, line numbers and blank lines are ignored, and plain base64 works too.'
+    : 'Plain text in, vase out. One base64 character per plant.';
+  run();
+}
+
+function run() {
+  if (state.mode === 'encode') encode();
+  else decode();
+}
+
+/* -------------------------------------------------------------------------- */
+/* events                                                                     */
+/* -------------------------------------------------------------------------- */
+
+for (const tab of dom.tabs) {
+  tab.addEventListener('click', () => setMode(tab.dataset.mode));
+}
+
+dom.run.addEventListener('click', run);
+dom.gutter.addEventListener('change', render);
+
+dom.fit.addEventListener('change', () => {
+  state.fit = dom.fit.checked;
+  if (state.fit) state.zoom = 1; // back to exactly filling the stage
+  fitToStage();
+});
+
+dom.zoomIn.addEventListener('click', () => zoomStep(1));
+dom.zoomOut.addEventListener('click', () => zoomStep(-1));
+
+dom.togglePanel.addEventListener('click', () => setPanel(!state.panelOpen));
+
+// The stage is the sizing input, so it has to be re-measured whenever it
+// changes - a window resize, a font arriving late, or the panel opening.
+let lastFit = null;
+const refit = () => {
+  if (!state.fit) return;
+  // Resizing the text can resize the element being observed, so only act when
+  // the answer actually changes; that keeps the observer from looping.
+  const next = Math.round(fitSize() * 10) / 10;
+  if (next === lastFit) return;
+  lastFit = next;
+  applySize(next);
+};
+addEventListener('resize', refit);
+if (typeof ResizeObserver === 'function') {
+  new ResizeObserver(refit).observe(dom.artifact);
+}
+
+for (const control of [dom.vessel, dom.breathing, dom.stamp]) {
+  control.addEventListener('change', () => {
+    if (state.mode === 'encode') run();
+    else if (state.base64) run();
+  });
+}
+
+dom.sample.addEventListener('click', () => {
+  dom.input.value = SAMPLE;
+  setMode('encode');
+});
+
+dom.clear.addEventListener('click', () => {
+  dom.input.value = '';
+  state.vase = '';
+  state.base64 = '';
+  state.message = '';
+  render();
+  updateStats();
+  setStatus('');
+  dom.input.focus();
+});
+
+dom.copy.addEventListener('click', async () => {
+  const text = state.mode === 'encode' ? state.vase : state.message;
+  if (!text) {
+    setStatus('Nothing to copy yet.', 'warn');
+    return;
+  }
+  try {
+    if (!navigator.clipboard) throw new Error('clipboard unavailable');
+    await navigator.clipboard.writeText(text);
+    setStatus(state.mode === 'encode' ? 'Vase copied.' : 'Text copied.', 'ok');
+  } catch {
+    // Clipboard access can be refused; selecting the text is the fallback.
+    const range = document.createRange();
+    range.selectNodeContents(dom.artifact);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    setStatus('Clipboard blocked — the output is selected, press ⌘/Ctrl+C.', 'warn');
+  }
+});
+
+dom.download.addEventListener('click', () => {
+  const text = state.mode === 'encode' ? state.vase : state.message;
+  if (!text) {
+    setStatus('Nothing to download yet.', 'warn');
+    return;
+  }
+  const name = state.mode === 'encode' ? 'vase64.txt' : 'vase64-decoded.txt';
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus(`Saved ${name}.`, 'ok');
+});
+
+dom.input.addEventListener('input', () => {
+  // Live, but only once the input is small enough to stay smooth.
+  if (dom.input.value.length < 20000) run();
+});
+
+// Pasting a vase is the common way in, so treat it like typing.
+dom.input.addEventListener('paste', () => {
+  setTimeout(() => run(), 0);
+});
+
+dom.input.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    run();
+  }
+  if (event.key === 'Escape') {
+    dom.input.value = '';
+    run();
+  }
+});
+
+// Zoom from anywhere, and hide the panel with a bare `h`.
+addEventListener('keydown', (event) => {
+  if (event.target instanceof HTMLTextAreaElement) return;
+  if (event.key === '+' || event.key === '=') zoomStep(1);
+  else if (event.key === '-' || event.key === '_') zoomStep(-1);
+  else if (event.key === 'h') setPanel(!state.panelOpen);
+  else if (event.key === 'f') {
+    state.fit = !state.fit;
+    dom.fit.checked = state.fit;
+    fitToStage();
+  }
+});
+
+/* -------------------------------------------------------------------------- */
+/* go                                                                         */
+/* -------------------------------------------------------------------------- */
+
+fillVessels();
+fillAlphabet();
+setPanel(true);
+state.monospaced = ensureMonospaced();
+dom.input.value = SAMPLE;
+setMode('encode');
+// Before the first paint the stage can still measure as collapsed, so the
+// initial fit waits for a frame; ResizeObserver then refines it if anything
+// about the layout settles late.
+requestAnimationFrame(() => fitToStage());
+
+})();
+    </script>
+  </body>
+</html>

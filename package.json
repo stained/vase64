@@ -1,0 +1,38 @@
+{
+  "name": "vase64",
+  "version": "1.0.0",
+  "description": "base64, but it blooms: a text encoder whose output is an ASCII vase",
+  "type": "module",
+  "main": "src/vase64.js",
+  "exports": {
+    ".": "./src/vase64.js"
+  },
+  "bin": {
+    "vase64": "bin/vase64.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "index.html",
+    "dev.html",
+    "styles.css",
+    "app.js",
+    "build.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/vase64.test.js test/single-file.test.mjs",
+    "build": "node build.mjs",
+    "serve": "node -e \"const{createServer}=require('node:http'),{readFileSync}=require('node:fs'),{extname}=require('node:path');const types={'.html':'text/html','.css':'text/css','.js':'text/javascript'};createServer((q,s)=>{const p=q.url==='/'?'/dev.html':q.url.split('?')[0];try{s.writeHead(200,{'content-type':types[extname(p)]||'text/plain'}).end(readFileSync('.'+p))}catch{s.writeHead(404).end('not found')}}).listen(8080,()=>console.log('VASE64 dev page on http://localhost:8080'))\""
+  },
+  "keywords": [
+    "base64",
+    "ascii-art",
+    "encoder",
+    "decoder",
+    "vase",
+    "flowers",
+    "single-file"
+  ],
+  "license": "MIT"
+}
