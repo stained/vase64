@@ -2,245 +2,169 @@
 
 **base64, but it blooms.**
 
-VASE64 is a base64 encoder and decoder that refuses to look like base64. Your
-plain text is turned into base64 the ordinary way, and then every base64
-character is planted as a little ASCII flower in an ASCII vase. Paste the vase
-back in and you get your text again, byte for byte.
-
-```
-  /!O|  !*| /!o| /|O:\/|O: /|O:\ :O|
-   ! |  ! |  ! |  | :  | :  | :  : |
-  /!@| /!O'  |o:\/|o: /:*| /!O'  |o:\
-   ! |  ! '  | :  | :  | :  : |  ! |
-       ...                           
-|                                   |
-|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~|
-|                                   |
-|-----------------------------------|
-|                                   |
-|________________|
-
-                  VASE64
-```
-
-It is a real, lossless codec — not a picture of one. The tests round-trip every
-one of the 64 plants, random binary data, emoji, and text in every vessel.
+VASE64 turns UTF-8 text into base64, then draws each unpadded base64 character
+as an ASCII flower. Short messages form a vase; longer messages spread into
+flower beds. Paste the complete garden back into Decode to recover the text.
 
 ## Try it
 
-**Double-click `index.html`.** That is the whole website: one file, 50 kB, with
-the codec, the app and the stylesheet inlined. No server, no build step, no
-dependencies, no network calls.
+[Get the standalone HTML app](https://github.com/stained/vase64/blob/main/index.html).
+On GitHub, use **Download raw file**, then double-click the downloaded
+`index.html` to open it in your browser. The GitHub file page shows the source;
+the downloaded file is the app.
 
-It has to be one file, because a browser refuses to load an ES module from
-`file://` — the origin is `null`, so the request is blocked as cross-origin:
+The generated page contains the codec, interface, and stylesheet, so it works
+offline without a server or dependencies.
 
-```
-Access to script at 'file:///…/app.js' from origin 'null' has been blocked by CORS policy
-```
+Type text and the garden grows automatically. **Grow garden** also runs the
+encoder explicitly. **Decode** accepts a garden or plain base64. **Copy** and
+**Download** export the garden when encoding, or the recovered text when
+decoding. **Fit**, zoom, and **Hide controls** change only the display.
+Breathing room and the VASE64 signature are built in.
 
-So `index.html` is *generated* with everything inlined. The sources stay
-readable and separately importable, which is what the CLI and the tests use:
+The bloom count excludes base64 padding. Bytes counts UTF-8 bytes; Chars counts
+JavaScript UTF-16 code units, so an emoji may count as more than one. Lines
+counts the displayed output lines, including blank lines.
 
-| File | Role |
-| --- | --- |
-| `src/vase64.js` | the codec — the only file that matters |
-| `app.js` | the bench: direction, live output, copy/download |
-| `styles.css` | styling |
-| `dev.html` | the page markup; loads the three above as real modules |
-| `index.html` | **generated** single file for opening off disk |
+## How encoding works
 
-Working on the app is nicer with real files, so use the dev page, which needs a
-server:
-
-```sh
-npm run serve      # http://localhost:8080
-npm run build      # regenerate index.html after editing app.js or the codec
+```text
+text -> UTF-8 bytes -> base64 -> 5-column, 4-row flowers -> vase or beds
 ```
 
-`npm run build` fails loudly if the bundle would not work: if it still
-references a sibling file, still contains module syntax, or does not parse as a
-single classic script. That last check is not theoretical — the codec and the
-app both used to declare `BLOOMS`, which is harmless across two modules and a
-hard `SyntaxError` once they share one scope.
+Base64 uses `A–Z`, `a–z`, `0–9`, `+`, and `/`: 64 values, each carrying six
+bits. The encoder splits each value into three two-bit fields:
+
+| Bits | Feature | Four possibilities |
+| --- | --- | --- |
+| 4–5 | Bloom | `o`, `O`, `*`, `@` |
+| 2–3 | Stem | `\|`, `!`, `:`, `'` |
+| 0–1 | Leaves | none, left `/`, right `\`, both |
+
+There are 4 × 4 × 4 = 64 unique plants. This is a one-to-one mapping, not
+random decoration. For example, base64 `D` (value 3) becomes:
+
+```text
+/ o \
+/ | \
+  |
+  |
+```
+
+The decoder reads the bloom and leaf positions in the first row, and the stem
+in the same column in the fourth row. The middle two rows and marks around
+the bottom stem are decoration. Removing a leaf from the first row changes
+the encoded value; removing the bottom stem makes the plant unreadable.
+
+Base64 `=` padding is not drawn. It is reconstructed when decoding the bytes.
+The interface displays flowers rather than the intermediate base64 string.
+This is an encoding, not encryption.
+
+## Automatic arrangements
+
+- Up to **32 flowers** form a vase. This is based on UTF-8 payload size, not
+  the number of visible text characters.
+- Longer messages form flower beds. Their width grows with the flower count:
+  `ceil(sqrt(count * 4))` plants per row, capped at 32. Beyond that cap, more
+  text adds rows. Each bed is at most 162 text columns including its border.
+- A stable hash of the payload selects the vase profile (bud, bowl, or urn)
+  and a small width variation, or the soil texture for beds. The same text
+  produces the same art with the same options.
+
+Vase flowers are arranged in a dome, narrower at the top. Decorative stems
+connect the lowest flowers to the mouth. Vessel profiles use smoothstep
+interpolation and are rasterised at their final size, limiting each wall to
+one column of movement per row. Vase width is capped separately from bouquet
+width. Flower beds instead give each planting row its own shallow soil border.
+
+Reading order is always **left to right, top to bottom**. Vase outlines,
+connecting stems, soil, spacing between complete plants, and the signature
+carry no payload data. You can remove a frame without losing the message,
+provided the complete plant cells and their order remain intact.
+
+## Decoding and copy/paste
+
+Use a monospaced font and preserve spaces inside the flowers. The decoder
+ignores blank lines, trailing spaces, the frame, and the signature. It also
+accepts line-number prefixes such as ` 12 | ` added by another editor, although
+the app does not generate line numbers.
+
+The glyph reader first tries a full four-row match, then falls back to the
+bloom, leaf flags, and aligned bottom stem. This tolerates changes to
+non-data decoration; it cannot reliably recover deleted data-bearing marks
+or reflowed spacing. There is no checksum or error correction: some changes
+can decode to different text without being detected.
+
+`encodeToVase` and `decodeVase` are text APIs. `base64ToVase` and `vaseToBase64`
+can transport the base64 representation of arbitrary bytes; `vaseToBase64`
+returns it without padding. Text decoding uses UTF-8 and may replace invalid
+byte sequences with replacement characters.
 
 ## Command line
 
-The same codec backs a small CLI.
-
 ```sh
-node bin/vase64.js encode "hello world"          # text -> vase
-node bin/vase64.js encode -f README.md > r.vase  # a file, in an urn
-node bin/vase64.js decode < r.vase               # vase -> text
-
-node bin/vase64.js encode "hi" --vessel bowl
+node bin/vase64.js encode "hello world"
+node bin/vase64.js encode -f README.md > garden.txt
+node bin/vase64.js decode < garden.txt
+node bin/vase64.js encode "hi" --layout bed
 ```
+
+Without text or `--file`, input is read from stdin. Files are read as UTF-8 text.
 
 | Option | Meaning |
 | --- | --- |
-| `-f`, `--file <path>` | read the input from a file |
-| `-v`, `--vessel <name>` | `bud`, `bowl`, or `urn` |
-| `-h`, `--help` | usage |
+| `-f`, `--file <path>` | Read text from a file |
+| `-l`, `--layout <name>` | `auto` (default), `vase`, or `bed` |
+| `-h`, `--help` | Show usage |
 
-Exit codes: `0` success, `1` bad usage or unreadable input, `2` nothing to
-decode.
+Exit codes: `0` success, `1` bad usage or unreadable input, `2` no decoded text
+from nonempty input. The CLI appends a newline to its output.
 
-## How it works
-
-The pipeline is deliberately ordinary until the very last step:
-
-```
-text ──UTF-8──▶ bytes ──base64──▶ A–Za–z0–9+/ ──plant──▶ vase
-```
-
-1. **Text to bytes.** UTF-8, so emoji and CJK work like anything else.
-2. **Bytes to base64.** Standard base64, exactly as `btoa` produces it. The UI
-   shows you this intermediate value, because that is the part that is
-   genuinely base64.
-3. **Base64 to vase.** Each base64 character carries 6 bits. Those 6 bits are
-   split into three 2-bit fields, and each field picks a feature of one plant:
-
-   | Bits | Field | Options |
-   | --- | --- | --- |
-   | 4–5 | bloom | `o` `O` `*` `@` (the tiers grow) |
-   | 2–3 | stem | `\|` `!` `:` `'` |
-   | 0–1 | leaves | none, `/`, `\`, or both |
-
-   That is 4 × 4 × 4 = 64 distinct plants, exactly the size of the base64
-   alphabet, so the mapping is a bijection. A plant occupies a cell five
-   columns wide and four rows tall:
-
-   ```
-       /  o  \        row 0  the bloom, with a leaf on each side   <- the value
-       /  |  \        row 1  the leaves
-         -!+           row 2  a node where the branches meet
-         -!!-          row 3  the stem, rooted in the vase
-   ```
-
-   The bloom sits in column 2 and the stem is drawn directly beneath it in the
-   same column, which is what lets the reader find one from the other. Only
-   those two carry data: the leaf rows and the node are decoration that make it
-   look like a plant rather than a tile.
-
-**Nothing about the vase itself carries data.** It can be widened, redrawn, or
-deleted entirely, and the message survives — the tests prove that by decoding a
-vase with the vase outline stripped off.
-
-### The garden is a dome
-
-A longer message buys a wider vase, which in turn fits more plants per rack, so
-a few hundred bytes of text still reads as a bouquet instead of one endless
-column. The racks also narrow towards the top on a softened sine curve, so the
-bouquet finishes in a rounded dome rather than a flat-topped slab — and a
-narrow rack is centred in the bed, which is what rounds the sides.
-
-The reading order stays row-major (left to right, bottom rack to top) no matter
-what the silhouette does, which is what keeps the decode unambiguous. The
-planner picks the smallest dome that holds the message, so the garden stays in
-proportion to the text rather than growing into one tall column.
-
-### Vessels are curves, not pictures
-
-Each vessel is a handful of control points — "at 55% of the height the vase is
-15 columns wide" — and the ASCII art is generated from them:
-
-```js
-bud: {
-  name: 'Bud vase',
-  points: [
-    [0.0, 15],   // [t, width], t from 0 at the rim to 1 at the base
-    [0.55, 9],
-    [1.0, 7],
-  ],
-  steps: 11,
-  water: [0.6, 0.72],   // the t range that gets a `~` surface
-  band: [0.82, 0.92],   // the t range that gets an `=` band
-  pour: 1,              // the rim: flowers stack strictly above it
-}
-```
-
-The width is interpolated with a smoothstep rather than straight lines, because
-a linear interpolation gives every row the same slope and the result reads as a
-traffic cone. Each row's wall character then comes from the *step the drawing
-actually takes* on that side, not from the ideal curve:
-
-- no movement → `|`
-- moving towards the axis → `\` on the left, `/` on the right
-- flaring away from it → `/` on the left, `\` on the right
-
-That distinction matters because a text cell is about twice as tall as it is
-wide, so a character can only lean about half a cell per row. Asking each wall
-about its own movement is also what stops a vase looking lopsided: computing
-the wall from the shared change in width makes one side lean while the other
-stands straight.
-
-Two conventions keep the drawing on a single axis:
-
-- **widths are odd**, so every row has a centre column;
-- **the canvas width is odd**, so an even-width row of flowers and an
-  odd-width row of vase still land on the same centre column.
-
-Because the drawing and the geometry come from one description, the walls can
-never disagree with the mouth they describe, and adding a fourth vessel means
-adding five numbers rather than drawing a picture.
-
-## Decoding is forgiving on purpose
-
-A vase is meant to be pasted around: into chat, into a comment, into a
-terminal. So the reader ignores blank lines, the vase outline, the `VASE64`
-signature, and line-number gutters like ` 12 | `. It also accepts plain base64
-directly, since that is the intermediate step.
-
-Two readers exist and the tests assert they agree on all 64 plants:
-
-- an **exact** reader that matches a whole plant, and
-- a **lenient** reader that reads the bloom and stems even if the leaves have
-  been trimmed by an editor.
-
-## Project layout
-
-```
-index.html          generated single-file site — double-click this
-build.mjs           the inliner
-dev.html            page markup for development (loads modules, needs a server)
-styles.css          styling
-app.js              the bench: direction, live output, copy/download
-src/vase64.js       the codec — the only file that matters
-bin/vase64.js       a CLI over the same module
-test/vase64.test.js
-test/single-file.test.mjs
-examples/           a few vases to decode
-```
-
-## Tests
-
-```sh
-npm test
-```
-
-31 tests in two files:
-
-- `test/vase64.test.js` — 24 tests over the codec: the glyph table (all 64
-  distinct, all decodable), round trips across sample text, random binary, emoji
-  and CJK, every vessel, lossy-looking input like stripped frames and pasted
-  gutters, and the error paths.
-- `test/single-file.test.mjs` — 7 tests that execute the exact inline script
-  from `index.html` against a small fake DOM, so the shipped file is tested for
-  what it is: one classic script that has to work with no imports and no server.
-
-## Use as a library
+## Library
 
 ```js
 import { encodeToVase, decodeVase } from './src/vase64.js';
 
-const vase = encodeToVase('hello world');
-decodeVase(vase); // 'hello world'
+const garden = encodeToVase('hello world');
+decodeVase(garden); // 'hello world'
 
-encodeToVase('hello', { vessel: 'urn', stamp: false });
+// Optional library overrides; these are not interface controls.
+encodeToVase('hello', { layout: 'bed' });
+encodeToVase('hello', { vessel: 'urn', stamp: false, breathingRoom: false });
 ```
 
-The module is a plain ES module with no dependencies, so it works in the
-browser and in Node without a build step.
+Defaults are `layout: 'auto'`, `vessel: 'auto'`, `stamp: true`, and
+`breathingRoom: true`. An explicit vessel chooses vase mode when layout is
+`auto`; an explicit `layout: 'bed'` takes precedence over a valid vessel option.
+The module has no dependencies and runs in browsers and Node.
+
+## Development
+
+| File | Role |
+| --- | --- |
+| `src/vase64.js` | Glyphs, encoding, decoding, and layout |
+| `app.js` | Interface, colouring, sizing, copy/download |
+| `styles.css` | Styling |
+| `dev.html` | Source page with ES module imports |
+| `index.html` | Generated self-contained page |
+| `build.mjs` | Inlines the sources and validates the bundle |
+| `bin/vase64.js` | CLI |
+| `test/` | Codec and single-file interface tests |
+
+```sh
+npm run serve  # http://localhost:8080 — serves dev.html
+npm run build  # regenerate index.html after source edits
+npm test
+```
+
+Use a server for `dev.html`: browser file-origin restrictions block its module
+imports when opened directly from disk. The build checks for external script
+or stylesheet references, leftover module syntax, and script parsing errors.
+
+Tests cover the 64 glyphs, text and Unicode round trips, automatic layout
+boundaries, width growth, connected vessel geometry, forgiving paste handling,
+and execution of the generated page against a minimal DOM. Browser visual
+checks complement these tests.
 
 ## Licence
 

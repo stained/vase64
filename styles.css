@@ -23,7 +23,6 @@
   /* Live values, driven by the fit logic in app.js. */
   --vase-size: 12px;
   --vase-line: 1.18;
-  --gutter: 76px;
 }
 
 * {
@@ -150,22 +149,9 @@ body {
   color: var(--sun);
 }
 
-/* Line numbers live beside the vase, not inside it: they are absolute, so
-   turning them on cannot move a single column of the drawing. */
-.artifact .gutter {
-  position: absolute;
-  left: 0;
-  white-space: pre;
-  font-family: var(--mono);
-  font-size: 0.62em;
-  line-height: var(--vase-line);
-  color: #574d7d;
-  pointer-events: none;
-}
-
 .artifact__text .stamp {
   color: var(--ink-faint);
-  letter-spacing: 0.24em;
+  letter-spacing: normal;
 }
 
 .artifact__empty {
@@ -416,7 +402,13 @@ body {
   height: 0.95rem;
 }
 
+.control {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .control__select {
+  max-width: 100%;
   appearance: none;
   background: #150e27;
   color: var(--ink);
@@ -572,6 +564,12 @@ body {
 
 /* ---------------------------------------------------------- small screens */
 
+@media (min-width: 781px) {
+  .shell:not(.panel-hidden) .artifact {
+    padding-left: calc(340px + 2.4rem);
+  }
+}
+
 @media (max-width: 780px) {
   .panel {
     top: auto;
@@ -652,8 +650,7 @@ body {
   .artifact__text .stem,
   .artifact__text .leaf,
   .artifact__text .wall,
-  .artifact__text .stamp,
-  .artifact__text .gutter {
+  .artifact__text .stamp {
     color: #000;
   }
 }

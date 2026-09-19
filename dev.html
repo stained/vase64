@@ -43,10 +43,7 @@
             <input type="checkbox" id="fit" checked />
             <span>Fit</span>
           </label>
-          <label class="chip chip--check">
-            <input type="checkbox" id="gutter" />
-            <span>Numbers</span>
-          </label>
+
           <button type="button" class="chip" id="copy">Copy</button>
           <button type="button" class="chip" id="download">Download</button>
           <button type="button" class="chip chip--menu" id="toggle-panel" aria-expanded="true" aria-controls="panel">
@@ -85,7 +82,7 @@
         </div>
 
         <p class="hint" id="input-hint">
-          Plain text in, vase out.
+          Plain text in, flowers out.
         </p>
 
         <label class="field">
@@ -100,23 +97,10 @@
           ></textarea>
         </label>
 
-        <div class="row">
-          <label class="control">
-            <span class="control__label">Vessel</span>
-            <select id="vessel" class="control__select"></select>
-          </label>
-          <label class="control control--check">
-            <input type="checkbox" id="breathing" checked />
-            <span>Breathing room</span>
-          </label>
-          <label class="control control--check">
-            <input type="checkbox" id="stamp" checked />
-            <span>Signature</span>
-          </label>
-        </div>
+        <p class="hint">Short messages bloom in a vase. Longer ones spread into flower beds.</p>
 
         <div class="actions">
-          <button type="button" class="button button--primary" id="run">Encode to vase</button>
+          <button type="button" class="button button--primary" id="run">Grow garden</button>
           <button type="button" class="button" id="sample">Sample</button>
           <button type="button" class="button" id="clear">Clear</button>
         </div>
@@ -129,9 +113,8 @@
         </dl>
 
         <p class="note">
-          Encoding turns your text into UTF-8 bytes, then base64, then one plant per base64
-          character: <code>64 = 4 blooms × 4 stems × 4 leaf shapes</code>. Nothing about the vase
-          carries data, so redrawing it never loses a bit.
+          Encoding turns your text into UTF-8 bytes, then base64, then one plant per unpadded base64
+          character: <code>64 = 4 blooms × 4 stems × 4 leaf shapes</code>. Vase shapes, soil borders and the signature carry no data. Preserve the flowers and their spacing when copying.
         </p>
 
         <details class="alphabet">

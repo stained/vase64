@@ -160,17 +160,15 @@ class FakeElement {
 
 function makeDocument() {
   const ids = [
-    'input-label', 'input-hint', 'input', 'vessel', 'breathing', 'stamp', 'run',
+    'input-label', 'input-hint', 'input', 'run',
     'sample', 'clear', 'output-heading', 'artifact', 'magnifier', 'copy',
-    'download', 'gutter', 'fit', 'zoom-in', 'zoom-out', 'zoom-readout',
+    'download', 'fit', 'zoom-in', 'zoom-out', 'zoom-readout',
     'toggle-panel', 'toggle-panel-label', 'panel', 'status', 'alphabet-table', 'protocol',
     'stat-chars', 'stat-bytes', 'stat-glyphs', 'stat-lines',
   ];
   const elements = new Map(ids.map((id) => [id, new FakeElement('div', id)]));
   // The real page starts with these checked; the shim must agree.
   // Mirror the `checked` attributes in the markup.
-  elements.get('breathing').checked = true;
-  elements.get('stamp').checked = true;
   elements.get('fit').checked = true;
 
   const tabs = ['encode', 'decode'].map((mode) => {
@@ -320,19 +318,18 @@ test('the bundle plants the sample and reports it', () => {
   assert.ok(source.length > 0, 'the sample should be loaded');
   assert.ok(el('artifact').innerHTML.includes('bloom'), 'the vase should be highlighted');
   assert.ok(plainOf(el('artifact').innerHTML).includes('VASE64'));
-  assert.equal(el('stat-glyphs').textContent, String(Buffer.from(source).toString('base64').length));
+  assert.equal(el('stat-glyphs').textContent, String(Buffer.from(source).toString('base64').replace(/=+$/, '').length));
   assert.equal(el('status').dataset.tone, 'ok');
   assert.match(el('status').textContent, /base64 characters planted/);
 });
 
-test('encoding in the bundle round trips for every vessel', () => {
-  for (const vessel of Object.keys(VESSELS)) {
+test('encoding in the bundle round trips for both arrangements', () => {
+  for (const layout of ['vase', 'bed']) {
     const { el } = runBundle();
-    const message = `hello from the ${vessel}`;
+    const message = layout === 'vase' ? 'hello' : 'A longer message that naturally grows into a flower bed.';
     el('input').value = message;
-    el('vessel').value = vessel;
-    el('vessel').fire('change');
-    assert.equal(decodeVase(plainOf(el('artifact').innerHTML)), message, vessel);
+    el('input').fire('input');
+    assert.equal(decodeVase(plainOf(el('artifact').innerHTML)), message, layout);
   }
 });
 
@@ -346,8 +343,8 @@ test('switching to Decode reads a vase back to text', () => {
   el('input').value = vase;
   el('input').fire('input');
 
-  assert.equal(el('input-label').textContent, 'Vase');
-  assert.equal(el('run').textContent, 'Decode vase');
+  assert.equal(el('input-label').textContent, 'Garden');
+  assert.equal(el('run').textContent, 'Decode garden');
   assert.equal(plainOf(el('artifact').innerHTML), message);
   assert.equal(el('status').dataset.tone, 'ok');
   assert.match(el('status').textContent, /Decoded \d+ base64 characters/);
@@ -374,9 +371,8 @@ test('pasting plain base64 decodes without a vase around it', () => {
   el('input').value = Buffer.from(message).toString('base64');
   el('input').fire('input');
   assert.equal(plainOf(el('artifact').innerHTML), message);
-  // Padding is stripped before storing, so a padded input re-encodes with `=`
-  // and the bench says so rather than claiming a clean round trip.
-  assert.equal(el('status').dataset.tone, 'warn');
+  // Implicit base64 padding is a valid round trip, not damaged input.
+  assert.equal(el('status').dataset.tone, 'ok');
   assert.match(el('status').textContent, /^Decoded \d+ /);
 });
 
@@ -420,18 +416,10 @@ test('the vase is sized to the stage, and can be zoomed by hand', () => {
   assert.ok(size() < zoomed, 'fit should undo the zoom');
 });
 
-test('line numbers do not change the width of the vase', () => {
+test('the interface has no line-number control or output gutters', () => {
   const { el } = runBundle();
-  const withoutNumbers = preOf(el('artifact').innerHTML);
-  el('gutter').checked = true;
-  el('gutter').fire('change');
-  const withNumbers = el('artifact').innerHTML;
-
-  // The numbers live beside the <pre>, not inside it, so the drawing is
-  // byte-for-byte identical whether they are on or off.
-  assert.ok(withNumbers.includes('class="gutter"'));
-  assert.equal(preOf(withNumbers), withoutNumbers);
-  assert.ok(!preOf(withNumbers).includes('gutter'));
+  assert.ok(!html.includes('id="gutter"'));
+  assert.ok(!el('artifact').innerHTML.includes('class="gutter"'));
 });
 
 test('the controls can be hidden without hiding the vase', () => {
@@ -468,4 +456,50 @@ test('the inlined codec is the same codec the tests import', () => {
   const fromBundle = decodeVase(plainOf(el('artifact').innerHTML));
   assert.equal(fromBundle, 'VASE64');
   assert.equal(fromBundle, decodeVase(encodeToVase('VASE64')));
+});
+
+test('pottery walls are coloured separately from connecting stems', () => {
+  const { el } = runBundle();
+  el('input').value = 'hello world';
+  el('input').fire('input');
+  const rendered = preOf(el('artifact').innerHTML).split('\n');
+  const rim = rendered.findIndex((line) => /class="wall">\.-/.test(line));
+  assert.ok(rim >= 0);
+  assert.match(rendered[rim + 1], /class="wall">\|/);
+  assert.match(rendered[rim + 1], /class="stem">\|/);
+  assert.match(rendered.at(-1), /class="stamp">/);
+});
+
+test('flower beds keep subsequent rows coloured as plants and copy losslessly', () => {
+  const { el, clipboard } = runBundle();
+  const message = 'Flowers spread across a wide bed. '.repeat(3);
+  el('input').value = message;
+  el('input').fire('input');
+  const output = preOf(el('artifact').innerHTML);
+  const lines = output.split('\n');
+  const rims = lines.map((line, index) => /class="wall">\.-/.test(line) ? index : -1).filter((index) => index >= 0);
+  assert.ok(rims.length > 1);
+  assert.ok(lines.slice(rims[0] + 3, rims[1]).some((line) => line.includes('class="bloom"')));
+  assert.equal(el('run').textContent, 'Grow garden');
+  assert.ok(!html.includes('id="layout"') && !html.includes('id="vessel"') && !html.includes('id="breathing"') && !html.includes('id="stamp"'));
+  el('copy').fire('click');
+  assert.equal(decodeVase(clipboard.written[0]), message);
+  assert.ok(clipboard.written[0].includes('VASE64'));
+});
+
+test('bloom counts and decode status exclude implicit base64 padding', () => {
+  for (const message of ['A', 'Hi']) {
+    const { el, tabs } = runBundle();
+    el('input').value = message;
+    el('input').fire('input');
+    const count = Buffer.from(message).toString('base64').replace(/=+$/, '').length;
+    assert.equal(el('stat-glyphs').textContent, String(count));
+    assert.match(el('status').textContent, new RegExp(`^${count} base64 characters planted`));
+    const garden = plainOf(el('artifact').innerHTML);
+    tabs[1].fire('click');
+    el('input').value = garden;
+    el('input').fire('input');
+    assert.equal(plainOf(el('artifact').innerHTML), message);
+    assert.equal(el('status').dataset.tone, 'ok');
+  }
 });

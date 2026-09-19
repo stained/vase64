@@ -1,35 +1,12 @@
 /*!
- * VASE64 - base64, but it blooms.
- *
- * The codec is deliberately tiny and dependency free so the same file can be
- * loaded by the browser (as an ES module) and by node (tests + CLI).
- *
- * Encoding pipeline
- * -----------------
- *   text  ->  UTF-8 bytes  ->  standard base64  ->  one 2-row plant glyph
- *                                                  per base64 character
- *
- * A glyph is 5 columns wide and 2 rows tall:
- *
- *      leaf   stem   bloom   stem   leaf      <- the bloom row carries the value
- *        .    stem    .     stem    .        <- the body row makes it a plant
- *
- * The value is chopped into three independent 2-bit fields, which is what makes
- * the mapping a bijection:
- *
- *      bits 4-5  (v >> 4)  bloom  -> o  O  *  @      (petals grow)
- *      bits 2-3  (v >> 2)  stem   -> |:  !|  :|  !'
- *      bits 0-1  (v)       leaves -> none  (  )  both
- *
- * Blooms, stems and leaves each draw from their own character set, so a row is
- * unambiguous: two stems, one bloom, and whatever leaves survive editing. Only
- * the bloom row is ever read back.
- *
- * Because every glyph is exactly 2 rows tall, the flower is a perfectly
- * regular grid: plants sit side by side above the rim and a vase is drawn
- * around them. Nothing about the vase carries data, so it can be redrawn,
- * resized or thrown away without losing a single bit. That also means a vase
- * with the frame stripped is still a valid VASE64 document.
+ * VASE64: UTF-8 text -> base64 -> one 5-column, 4-row plant per
+ * unpadded base64 character. Each plant stores six bits:
+ * bloom (o O * @), stem (| ! : '), and leaves (none, left, right, both).
+ * The decoder reads the bloom and leaves in row 0 and the stem in row 3.
+ * Rows 1 and 2 are decorative; row 3 must retain its aligned stem.
+ * Up to 32 plants form a vase; longer payloads become widening flower beds.
+ * Frames, connecting stems, soil and the signature carry no payload data.
+ * This dependency-free module runs in the browser and Node.
  */
 
 export const BASE64_ALPHABET =
@@ -45,12 +22,12 @@ export function base64Value(character) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * A plant is a cell six columns wide and four rows tall:
+ * A plant is a cell five columns wide and four rows tall:
  *
- *      row 0   the bloom, with a leaf on each side     <- carries the value
+ *      row 0   the bloom and optional leaves          <- four data bits
  *      row 1   foliage
  *      row 2   a node, where the branches meet
- *      row 3   the stem, rooted in the vase
+ *      row 3   the aligned stem                       <- two data bits
  *
  * The bloom sits in the middle of the cell and the stem directly under it, so
  * plants in adjacent cells never overlap and a bloom is always the only bloom
@@ -58,8 +35,6 @@ export function base64Value(character) {
  */
 export const CELL_COLUMNS = 5;
 export const CELL_ROWS = 4;
-/** Columns the bloom row is drawn across, leaving a gap between plants. */
-const CELL_CONTENT = 5;
 
 /** The four blooms, in the order their codes are assigned: the tiers grow. */
 const BLOOMS = ['o', 'O', '*', '@'];
@@ -75,20 +50,9 @@ const LEAF_MODES = [
   { left: '/', right: '\\' },
 ];
 
-/**
- * The two rows under the bloom, indexed by stem style: a node where the
- * branches meet, then the foliage hanging off it. Both are six columns wide
- * with the stem's own column blank, because the stem is written in afterwards
- * - that is what keeps it lined up with the bloom two rows above.
- */
 /** The column of a cell the stem is drawn in, from the bloom to the root. */
 const STEM_COLUMN = 2;
-/**
- * The two rows between the bloom and the root, indexed by stem style: a node
- * where the branches meet, then the foliage hanging off it. Each is a six
- * column pattern with column 3 left blank, because the stem is stamped into
- * that column afterwards so it lines up with the bloom above.
- */
+/** Patterns for rows 2 and 3. The stem is stamped into column 2 (zero-based). */
 const STEM_DECORATION = [
   { node: '  |  ', foliage: '  |  ' },
   { node: ' --+ ', foliage: ' --!-' },
@@ -96,12 +60,7 @@ const STEM_DECORATION = [
   { node: "  '  ", foliage: "  '  " },
 ];
 
-/**
- * Every character a plant may contain. The vase is drawn only from lines
- * (`|` `\\` `/` `_`), so a row with a bloom and a stem is a plant row and
- * anything else in it is foliage. Blooms and stems never overlap, which is what
- * makes a row readable at all.
- */
+/** Bloom characters are reserved for plants; frames and soil never use them. */
 export const LEAVES = '/\\';
 export const PLANT_ALPHABET = `${BLOOMS.join('')}${STEMS.join('')}${LEAVES}-+`;
 
@@ -123,12 +82,8 @@ export const STEM_CHARACTERS = STEMS.join('');
  *   bits 0-1  leaves    none, left, right, both
  *
  * A cell is five columns wide and four rows tall. Every row is built by
- * writing into a fixed array rather than by counting spaces in a template:
- *
- *      row 0   /  |  o  |              bloom row, carries the value
- *      row 1   /     \             the leaves, wider than the bloom
- *      row 2      --+--                a node where the branches meet
- *      row 3      |                    the stem, rooted in the vase
+ * writing into a fixed array. Row 0 contains the bloom and leaf flags;
+ * row 1 repeats the leaves around a stem; rows 2 and 3 use the patterns above.
  *
  * The bloom sits in column 2 and the stem directly under it in the same
  * column, so the reader can always find one from the other.
@@ -180,8 +135,8 @@ const STEM_LOOKUP = new Map(STEMS.map((stem, index) => [stem, index]));
  * Read a plant back into a 6-bit value.
  *
  * A cell can be given as its four rows (an array) or as one string, in which
- * case newlines separate the rows. Only the first row and the stem row are
- * consulted, because those are the two the writer controls.
+ * case newlines separate the rows. Try a full-cell match first, then fall back
+ * to the bloom/leaf row and the aligned stem in the fourth row.
  *
  * @returns {number} 0-63, or -1 when this is not a plant.
  */
@@ -193,12 +148,10 @@ export function glyphToValue(cell) {
 }
 
 /**
- * Recover a value from a plant whose decoration has been retouched or whose
- * lower rows were trimmed away.
- *
- * Blooms carry bits 4-5 and are unique per glyph; the stem carries bits 2-3 and
- * stands directly underneath the bloom, so it survives a trimmed vine. Leaves
- * are decoration and only have to be present enough to read bits 0-1.
+ * Recover a value from a plant whose non-data decoration has changed.
+ * Row 0 stores bloom bits 4-5 and leaf bits 0-1; row 3 stores stem bits 2-3.
+ * Removing a bloom-row leaf changes the value. Removing the bottom stem
+ * makes the plant unreadable. Spacing must preserve their shared column.
  *
  * @returns {number} 0-63, or -1 when no bloom / stem can be found.
  */
@@ -207,7 +160,7 @@ export function glyphToValueLenient(cell) {
   const bloomRow = rows[0] ?? '';
   const stemRow = rows[CELL_ROWS - 1] ?? '';
 
-  // Exactly one bloom, and the same stem character on both sides of it.
+  // Exactly one bloom, with a stem in the same column three rows below.
   const bloomAt = bloomRow.search(/[oO*@]/);
   if (bloomAt === -1) return -1;
   if (/[oO*@]/.test(bloomRow.slice(bloomAt + 1))) return -1;
@@ -303,9 +256,10 @@ const textDecoder = new TextDecoder('utf-8', { fatal: false });
 /* -------------------------------------------------------------------------- */
 
 export const DEFAULT_OPTIONS = Object.freeze({
-  /** Which shape to pour the flowers into. */
-  vessel: 'bud',
-  /** Leave a blank row between the flowers and the rim. */
+  /** Vase shape is chosen from the payload; explicit vessels remain a library override. */
+  vessel: 'auto',
+  layout: 'auto',
+  /** Give the connecting stems two extra rows above the rim. */
   breathingRoom: true,
   /** Sign the work. */
   stamp: true,
@@ -419,11 +373,8 @@ function oddWidth(width) {
 /**
  * Pick a wall character from how far *that* wall moves between two rows.
  *
- * On a text grid a cell is about twice as tall as it is wide, so a diagonal
- * covers about half a cell per row: one column of movement per row is already
- * a fairly steep line, and anything more has to be drawn as a step. Each side
- * is asked separately, because a vase that widens on the left and narrows on
- * the right needs two different characters.
+ * Each side moves at most one column per row. The wall character follows
+ * that movement so consecutive rows keep a connected contour.
  *
  * `shift` is how far the wall moves *towards the axis* going down the vase, so
  * a positive shift means the silhouette is closing in.
@@ -440,8 +391,10 @@ function wallFor(shift, side) {
  * padded out to the widest one, so the vase is symmetric about a fixed axis
  * however the curve moves.
  */
-function buildVesselArt(spec) {
-  const stepAt = (step) => (spec.steps === 1 ? 1 : step / (spec.steps - 1));
+function buildVesselArt(spec, targetWidth = Math.max(...spec.points.map(([, width]) => width))) {
+  const scale = targetWidth / Math.max(...spec.points.map(([, width]) => width));
+  const steps = Math.max(spec.steps, Math.ceil(spec.steps * scale * 0.65));
+  const stepAt = (step) => (steps === 1 ? 1 : step / (steps - 1));
 
   // Work out every row's width first, so each wall can be drawn from the step
   // the drawing actually takes rather than from the ideal curve behind it.
@@ -452,8 +405,8 @@ function buildVesselArt(spec) {
   // break; clamping keeps the silhouette followable, at the cost of a slightly
   // tighter curve than the control points asked for.
   const widths = [];
-  for (let step = 0; step < spec.steps; step += 1) {
-    const wanted = oddWidth(widthAt(spec.points, stepAt(step)));
+  for (let step = 0; step < steps; step += 1) {
+    const wanted = oddWidth(widthAt(spec.points, stepAt(step)) * scale);
     const previous = widths[step - 1];
     widths.push(
       previous === undefined ? wanted : Math.min(Math.max(wanted, previous - 2), previous + 2),
@@ -468,14 +421,14 @@ function buildVesselArt(spec) {
   const wallAt = (width) => (natural - width) / 2;
 
   // Above the body: the flared opening, then the lip the bouquet sits in.
-  const rim = oddWidth(widthAt(spec.points, 0));
-  const art = [centred(rim, `\\${' '.repeat(rim - 2)}/`), centred(rim, `|${' '.repeat(rim - 2)}|`)];
+  const rim = widths[0];
+  const art = [centred(rim, `.${'-'.repeat(rim - 2)}.`), centred(rim, `|${' '.repeat(rim - 2)}|`)];
 
-  for (let step = 0; step < spec.steps; step += 1) {
+  for (let step = 0; step < steps; step += 1) {
     const t = stepAt(step);
     const width = widths[step];
-    const next = widths[Math.min(step + 1, spec.steps - 1)];
-    const last = step === spec.steps - 1;
+    const next = widths[Math.min(step + 1, steps - 1)];
+    const last = step === steps - 1;
     // How far the silhouette moves towards its axis on the way to the next
     // row: positive when the vase narrows, negative when it flares.
     const shift = last ? 0 : wallAt(next) - wallAt(width);
@@ -487,7 +440,7 @@ function buildVesselArt(spec) {
     // The base closes with a flat run of underscores.
     const interior = (last ? '_' : fill).repeat(width - 2);
     const left = last ? '\\' : wallFor(shift, 'left');
-    const right = last ? '_' : wallFor(shift, 'right');
+    const right = last ? '/' : wallFor(shift, 'right');
     art.push(centred(width, left + interior + right));
   }
   return art;
@@ -512,104 +465,15 @@ export const VESSELS = Object.freeze(
   Object.fromEntries(Object.entries(VESSEL_PROFILES).map(assembleVessel)),
 );
 
-/** Vessel legend: what counts as a wall, and what has to be non-wall. */
-const WALL = /[|\\/_]/;
-
-/**
- * Flatten a vessel template into rows of cells plus their walls.
- */
-function parseVessel(vessel) {
-  return vessel.art.map((row) => {
-    const cells = [...row].map((character) => ({ character, wall: WALL.test(character) }));
-    const walls = [];
-    cells.forEach((cell, column) => {
-      if (cell.wall) walls.push(column);
-    });
-    return {
-      cells,
-      first: walls[0],
-      last: walls[walls.length - 1],
-      spans: walls.length > 0,
-    };
-  });
-}
-
-/**
- * The span between a row's walls: none when the row has no walls, the gap when
- * it has two, and the mirrored gap when a single wall is the whole row.
- */
-function hollowSpan(row) {
-  if (!row.spans) return 0;
-  return row.first === row.last ? 2 * (row.first + 1) - 1 : row.last - row.first - 1;
-}
-
-/**
- * The interior width a row has once the vase is `width` columns wide, plus the
- * column its left wall lands on.
- *
- * Both edges are derived from the shared axis rather than from each other:
- * scaling a left offset and a span separately lets the two round in opposite
- * directions, which is what makes one side of a vase fatter than the other.
- */
-function scaleRow(row, width, natural) {
-  const interior = Math.max(1, Math.round(hollowSpan(row) * (width / natural)));
-  // Odd interiors leave one centre column; even ones straddle it. Forcing odd
-  // keeps the two walls the same distance from the axis.
-  const span = interior % 2 === 1 ? interior : interior + 1;
-  // Centre the span on the axis rather than preserving the raw offsets: the
-  // drawing's own rows are not perfectly concentric, and scaling that
-  // irregularity is what makes a widened vase look lopsided.
-  const wall = Math.max(0, Math.floor((width - 1 - span) / 2));
-  return { span, wall };
-}
-
-/** The hollow span a row has once the vase is `width` columns wide. */
-function spanAt(row, width, natural) {
-  if (!row.spans) return 0;
-  return scaleRow(row, width, natural).span;
-}
-
-/**
- * Draw one vase row `width` columns wide on the axis every row shares. The
- * span is re-tiled with the row's own filler, so a water line stays a water
- * line and a plain body row stays hollow.
- */
-function buildVaseRow(row, width, natural) {
-  const padding = (content) =>
-    ' '.repeat(Math.max(0, Math.round((width - content.length) / 2))) + content;
-
-  // A row with no walls is decoration: centre it and leave the rest to the
-  // rows above and below, which do have walls.
-  if (!row.spans) return padding(row.cells.map((cell) => cell.character).join(''));
-  // A row that narrows to one column is that column, bled out across the crop.
-  if (row.first === row.last) return row.cells[row.first].character.repeat(Math.max(1, width));
-
-  const { span, wall } = scaleRow(row, width, natural);
-  const filler = row.cells
-    .slice(row.first + 1, row.last)
-    .map((cell) => cell.character)
-    .filter((character) => character !== ' ');
-  const interior = [];
-  for (let index = 0; index < span; index += 1) {
-    interior.push(filler.length === 0 ? ' ' : filler[index % filler.length]);
-  }
-  return (
-    ' '.repeat(wall) +
-    row.cells[row.first].character +
-    interior.join('') +
-    row.cells[row.last].character
-  );
-}
-
 const BED = Object.freeze({
   /** One plant plus a column of elbow room. */
   min: CELL_COLUMNS + 2,
   /** Where a short message stops growing the vase. */
-  default: 25,
+  default: 35,
   /** Hard ceiling, in columns, for the whole garden. */
   max: 121,
   /** How much wider the garden gets for each extra rack of plants. */
-  perRack: 4,
+  perRack: 8,
   /** Beyond this the bouquet stops being a bouquet and becomes a field. */
   maxRacks: 36,
 });
@@ -636,7 +500,7 @@ function gardenPlan(racks) {
     const hump = Math.pow(Math.sin((Math.PI / 2) * (1 - t)), 0.45);
     // Two columns minimum: a rack of one is a lone stalk standing above the
     // rest, which reads as a mistake rather than as the top of a bouquet.
-    const columns = Math.max(2, Math.round(capacity * hump));
+    const columns = Math.max(2, Math.round(capacity * (0.35 + 0.65 * hump)));
     racks_.push(columns);
     total += columns;
   }
@@ -645,29 +509,66 @@ function gardenPlan(racks) {
 
 /**
  * Fit `count` plants into the smallest dome that will hold them, and hand back
- * the racks to draw. Only the racks that ended up in use are returned, and the
- * last one is trimmed to the plants that are left.
+ * the racks to draw in display order, sharing unused space across the dome.
  */
 function planGarden(count) {
   if (count === 0) return { bedWidth: BED.min, racks: [] };
   for (let racks = 1; racks <= BED.maxRacks; racks += 1) {
     const plan = gardenPlan(racks);
     if (plan.capacity < count) continue;
-    const used = [];
-    let planted = 0;
-    for (const columns of plan.racks) {
-      if (planted >= count) break;
-      const take = Math.min(columns, count - planted);
-      used.push(take);
-      planted += take;
+    // Fill the entire silhouette proportionally, then read top to bottom.
+    // Keeping the spare capacity spread out avoids a lone remainder at the rim.
+    const topDown = [...plan.racks].reverse();
+    const used = topDown.map((columns) => Math.floor(columns * count / plan.capacity));
+    let remaining = count - used.reduce((sum, columns) => sum + columns, 0);
+    for (let index = used.length - 1; remaining > 0; index = (index - 1 + used.length) % used.length) {
+      if (used[index] < topDown[index]) { used[index] += 1; remaining -= 1; }
     }
-    return { bedWidth: plan.bedWidth, racks: used };
+    return { bedWidth: plan.bedWidth, racks: used.filter(Boolean) };
   }
   // Long past the point of being readable as a garden: full-width racks keep it
   // lossless even if it stops looking like a bouquet.
   const capacity = Math.max(1, Math.floor(BED.max / CELL_COLUMNS));
   const racks = new Array(Math.ceil(count / capacity)).fill(capacity);
   return { bedWidth: BED.max, racks };
+}
+
+/** Stable visual seed from the payload values, independent of padding and newlines. */
+function gardenSeed(values) {
+  let seed = 2166136261;
+  for (const value of values) seed = Math.imul(seed ^ value, 16777619) >>> 0;
+  return seed;
+}
+
+/** A bed grows horizontally first, then adds equally wide beds below it. */
+function renderFlowerBeds(values, config) {
+  // Grow width with payload size while sharing flowers across rows. Cap at
+  // 32 flowers (160 columns); beyond that, only the number of rows grows.
+  const columns = Math.max(1, Math.min(32, values.length, Math.ceil(Math.sqrt(values.length * 4))));
+  const interior = columns * CELL_COLUMNS;
+  const width = interior + 2;
+  const lines = [];
+  const soil = ['.', ':', '='][gardenSeed(values) % 3];
+  for (let start = 0; start < Math.max(1, values.length); start += columns) {
+    if (start) lines.push('');
+    const plants = values.slice(start, start + columns);
+    for (let row = 0; row < CELL_ROWS && plants.length; row += 1) {
+      lines.push((' ' + plants.map((value) => GLYPHS[value][row]).join('')).trimEnd());
+    }
+    const roots = plants.map((_, index) => 1 + index * CELL_COLUMNS + STEM_COLUMN);
+    if (config.breathingRoom && plants.length) {
+      const stems = new Array(width).fill(' ');
+      for (const x of roots) stems[x] = '|';
+      lines.push(stems.join('').trimEnd());
+    }
+    const rim = [...('.' + '-'.repeat(interior) + '.')];
+    for (const x of roots) rim[x] = '|';
+    lines.push(rim.join(''));
+    lines.push('|' + soil.repeat(interior) + '|');
+    lines.push('\\' + '_'.repeat(interior) + '/');
+  }
+  if (config.stamp) lines.push('', ' '.repeat(Math.max(0, Math.floor((width - 6) / 2))) + 'VASE64');
+  return lines.join('\n');
 }
 
 /**
@@ -680,11 +581,11 @@ function planGarden(count) {
 export function base64ToVase(base64, options = {}) {
   const config = { ...DEFAULT_OPTIONS, ...options };
   if (typeof base64 !== 'string') throw new TypeError('base64ToVase expects a string');
-  const vessel = VESSELS[config.vessel ?? 'bud'];
-  if (!vessel) {
-    throw new Error(
-      `VASE64: unknown vessel "${config.vessel}" (try ${Object.keys(VESSELS).join(', ')})`,
-    );
+  if (!['auto', 'vase', 'bed'].includes(config.layout)) {
+    throw new Error(`VASE64: unknown layout "${config.layout}" (try auto, vase or bed)`);
+  }
+  if (config.vessel !== 'auto' && !VESSELS[config.vessel]) {
+    throw new Error(`VASE64: unknown vessel "${config.vessel}" (try auto, ${Object.keys(VESSELS).join(', ')})`);
   }
 
   const values = [];
@@ -697,18 +598,17 @@ export function base64ToVase(base64, options = {}) {
     values.push(value);
   }
 
-  const rows = parseVessel(vessel);
-  const natural = vessel.naturalWidth;
-  const rim = rows[vessel.pour];
+  const layout = config.layout === 'auto'
+    ? (config.vessel !== 'auto' || values.length <= 32 ? 'vase' : 'bed')
+    : config.layout;
+  if (layout === 'bed') return renderFlowerBeds(values, config);
+  const seed = gardenSeed(values);
+  const vessel = VESSELS[config.vessel === 'auto' ? Object.keys(VESSELS)[seed % 3] : config.vessel];
 
-  // The garden is a stack of racks. Each rack is one plant tall and holds as
-  // many plants as it is wide, and the racks get narrower towards the top so
-  // the bouquet finishes in a dome rather than a flat-topped slab. The reading
-  // order stays row-major - left to right, bottom rack to top - which is what
-  // keeps the decode unambiguous however the silhouette moves.
+  // The payload always follows display order: left to right, top to bottom.
   const plan = planGarden(values.length);
   const bedWidth = plan.bedWidth;
-  const width = bedWidth + 2;
+  const width = Math.max(vessel.naturalWidth, bedWidth + 2);
   // The garden is centred on the vase's axis as a whole block, not row by row:
   // a grid only lines up if every row starts in the same column. Flooring the
   // half-column keeps an even-width grid and an oddly wide vase on the
@@ -718,24 +618,52 @@ export function base64ToVase(base64, options = {}) {
 
   const lines = [];
   let planted = 0;
+  let roots = [];
   for (const columns of plan.racks) {
     const slice = values.slice(planted, planted + columns);
     planted += slice.length;
     const rackWidth = columns * CELL_COLUMNS;
     // A narrow rack is centred in the bed, which is what rounds the top.
     const inset = Math.floor((bedWidth - rackWidth) / 2);
+    roots = slice.map((_, index) => leftPad + inset + index * CELL_COLUMNS + STEM_COLUMN);
     for (let cellRow = 0; cellRow < CELL_ROWS; cellRow += 1) {
       const across = slice.map((value) => GLYPHS[value][cellRow]).join('');
       lines.push(place(' '.repeat(inset) + across).trimEnd());
     }
   }
 
-  if (config.breathingRoom && values.length > 0) lines.push('');
-
-  // buildVaseRow aligns each row on the axis itself, so nothing is padded
-  // twice. The stamp is what gives the canvas its margin, so a wide vase that
-  // fills the stage still sits clear of the floating panel.
-  for (const row of rows) lines.push(buildVaseRow(row, width, natural).trimEnd());
+  // Draw at the final resolution; never stretch an already rasterised outline.
+  const proportion = { bud: 0.72, bowl: 0.92, urn: 0.68 }[vessel.key];
+  const vesselWidth = oddWidth(Math.max(vessel.naturalWidth, Math.min(45, width * proportion * (config.vessel === 'auto' ? 0.9 + ((seed >>> 8) % 21) / 100 : 1))));
+  const art = buildVesselArt(vessel, vesselWidth);
+  const artWidth = Math.max(...art.map((row) => row.length));
+  const offset = Math.floor((width - artWidth) / 2);
+  const body = art.map((row) => [...(' '.repeat(Math.max(0, offset)) + row)]);
+  if (roots.length) {
+    const first = body[0].indexOf('.');
+    const last = body[0].lastIndexOf('.');
+    const centre = (first + last) / 2;
+    const half = Math.max(0, Math.min((roots.at(-1) - roots[0]) / 2, Math.floor((last - first - 4) / 2)));
+    const targets = roots.map((_, index) => Math.round(centre +
+      (roots.length === 1 ? 0 : (index / (roots.length - 1) * 2 - 1) * half)));
+    const distance = Math.max(...roots.map((x, index) => Math.abs(targets[index] - x)));
+    const height = Math.max(1, distance) + (config.breathingRoom ? 2 : 0);
+    let previous = roots;
+    for (let step = 1; step <= height; step += 1) {
+      const row = new Array(width).fill(' ');
+      const next = roots.map((x, index) => Math.round(x + (targets[index] - x) * step / height));
+      next.forEach((x, index) => { row[x] = x === previous[index] ? '|' : x > previous[index] ? '\\' : '/'; });
+      lines.push(row.join('').trimEnd());
+      previous = next;
+    }
+    // Carry the stems through the lip and into the vessel.
+    for (let row = 0; row < Math.min(4, body.length - 1); row += 1) {
+      const left = body[row].findIndex((character) => character !== ' ');
+      const right = body[row].findLastIndex((character) => character !== ' ');
+      for (const x of targets) if (x > left && x < right) body[row][x] = '|';
+    }
+  }
+  for (const row of body) lines.push(row.join('').trimEnd());
 
   if (config.stamp) {
     lines.push('');
@@ -750,8 +678,8 @@ export function base64ToVase(base64, options = {}) {
  * Pull the base64 back out of a vase.
  *
  * Blank lines, the vase outline, line-number gutters and the stamp are all
- * ignored; only the bloom rows contribute data, and each row may hold many
- * plants.
+ * ignored. Bloom rows locate plants; their leaves and bottom stems recover
+ * the six-bit values in display order.
  *
  * @param {string} vase
  * @returns {string} base64 (unpadded, as stored)

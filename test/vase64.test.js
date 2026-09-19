@@ -34,7 +34,7 @@ test('there are 64 glyphs and every one is distinct', () => {
   assert.equal(new Set(GLYPH_SIGNATURES).size, 64);
 });
 
-test('every glyph is a full cell: four rows of six columns', () => {
+test('every glyph is a full cell: four rows of five columns', () => {
   for (const [value, glyph] of GLYPHS.entries()) {
     assert.equal(glyph.length, CELL_ROWS, `glyph ${value} row count`);
     for (const row of glyph) {
@@ -219,8 +219,8 @@ test('flowers stay above the rim, and nothing paints over the walls', () => {
 });
 
 test('a bigger payload grows a bigger vase and wraps the bouquet', () => {
-  const small = base64ToVase('SGk');
-  const big = base64ToVase('SGk'.repeat(300));
+  const small = base64ToVase('SGk', { layout: 'vase' });
+  const big = base64ToVase('SGk'.repeat(300), { layout: 'vase' });
   const width = (vase) => Math.max(...vase.split('\n').map((line) => line.length));
   assert.ok(width(big) >= width(small));
   assert.ok(width(big) <= 121);
@@ -276,11 +276,10 @@ test('a vase with the frame deleted still decodes', () => {
   // A plant is four rows tall and only its bloom row has a bloom, so keeping
   // the "flower and stem" rows keeps the data. Keeping the bloom rows alone
   // would not: the stem carries two of the six bits.
-  const keep = /[oO*@|:!']/;
-  const petals = vase
-    .split('\n')
-    .filter((line) => keep.test(line) && !/^\s*[\\/|_~=-]+\s*$/.test(line))
-    .join('\n');
+  const lines = vase.split('\n');
+  const plants = splitPlants(vase);
+  const lastPlant = plants.at(-1);
+  const petals = lines.slice(0, lastPlant.row + CELL_ROWS).join('\n');
   assert.equal(decodeVase(petals), text);
 
   const bloomsOnly = vase
@@ -309,4 +308,81 @@ test('invalid input is rejected loudly', () => {
   assert.throws(() => base64ToVase('not base64!'), /not a base64 character/);
   assert.throws(() => base64ToVase('SGk', { vessel: 'amphora' }), /unknown vessel/);
   assert.throws(() => encodeToVase(null, { vessel: 'nope' }), /unknown vessel/);
+});
+
+test('bouquets widen towards the rim without changing payload order', () => {
+  for (let length = 1; length <= 256; length += 1) {
+    const payload = BASE64_ALPHABET.repeat(4).slice(0, length);
+    const vase = base64ToVase(payload, { layout: 'vase' });
+    const racks = vase.split('\n').filter(hasFlowers).map((line) => [...line].filter((c) => 'oO*@'.includes(c)).length);
+    assert.ok(racks.every((count, index) => index === 0 || count >= racks[index - 1]), `length ${length}: ${racks}`);
+    assert.equal(vaseToBase64(vase), payload);
+  }
+});
+
+test('final vessel contours are symmetric, connected and closed', () => {
+  for (const vessel of VESSEL_NAMES) {
+    for (const length of [0, 1, 16, 64, 256, 900]) {
+      const lines = base64ToVase('A'.repeat(length), { vessel, stamp: false }).split('\n');
+      const rim = lines.findIndex((line) => /^\s*\.[-|]+\.$/.test(line));
+      assert.ok(rim >= 0);
+      const body = lines.slice(rim);
+      const axis = body[0].search(/\S/) + body[0].length - 1;
+      let previous = body[0].search(/\S/);
+      for (const line of body) {
+        const left = line.search(/\S/);
+        assert.equal(left + line.length - 1, axis);
+        assert.ok(Math.abs(left - previous) <= 1, `${vessel}: disconnected wall`);
+        previous = left;
+      }
+      assert.match(body.at(-1), /^\s*\\_+\/$/);
+      if (length) assert.ok(lines.slice(splitPlants(lines.join('\n')).at(-1).row + CELL_ROWS, rim).every((line) => line.trim()));
+    }
+  }
+});
+
+test('automatic vessels are deterministic and vary with content, including equal lengths', () => {
+  const bodies = new Set();
+  for (const message of ['rose', 'iris', 'lily', 'fern', 'seed', 'bush']) {
+    const vase = encodeToVase(message);
+    assert.equal(vase, encodeToVase(message));
+    assert.equal(decodeVase(vase), message);
+    const lines = vase.split('\n');
+    const rim = lines.findIndex((line) => /^\s*\.[-|]+\.$/.test(line));
+    bodies.add(lines.slice(rim).join('\n'));
+  }
+  assert.ok(bodies.size > 1, 'content should change the vessel, not just the flowers');
+  assert.equal(base64ToVase('SGk='), base64ToVase('S\nGk'));
+});
+
+test('flower beds grow wider with payload length and wrap at a bounded width', () => {
+  let previousWidth = 0;
+  for (let count = 0; count <= 100; count += 1) {
+    const payload = BASE64_ALPHABET.repeat(2).slice(0, count);
+    const bed = base64ToVase(payload, { layout: 'bed' });
+    const width = Math.max(...bed.split('\n').map((line) => line.length));
+    assert.ok(width >= previousWidth);
+    assert.ok(width <= 162);
+    assert.equal(vaseToBase64(bed), payload);
+    assert.equal(splitPlants(bed).length, count);
+    assert.ok(bed.includes('VASE64'));
+    previousWidth = width;
+  }
+  for (const message of SAMPLES) {
+    assert.equal(decodeVase(encodeToVase(message, { layout: 'bed' })), message);
+  }
+  assert.throws(() => base64ToVase('SGk', { layout: 'field' }), /unknown layout/);
+});
+
+test('automatic arrangement switches at 32 flowers and beds continue to widen', () => {
+  for (const count of [0, 1, 31, 32, 33, 64, 128, 256]) {
+    const payload = 'A'.repeat(count);
+    const automatic = base64ToVase(payload);
+    assert.equal(automatic, base64ToVase(payload, { layout: count <= 32 ? 'vase' : 'bed' }));
+    assert.equal(vaseToBase64(automatic), payload);
+  }
+  const width = (count) => Math.max(...base64ToVase('A'.repeat(count)).split('\n').map((line) => line.length));
+  assert.ok(width(33) < width(64));
+  assert.ok(width(64) < width(128));
+  assert.ok(width(128) < width(256));
 });

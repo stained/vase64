@@ -10,7 +10,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { decodeVase, encodeToVase, VESSELS } from '../src/vase64.js';
+import { decodeVase, encodeToVase } from '../src/vase64.js';
 
 const USAGE = `vase64 - base64, but it blooms
 
@@ -22,18 +22,18 @@ With no text or file, input is read from stdin.
 
 Options
   -f, --file <path>     read input from a file
-  -v, --vessel <name>   ${Object.keys(VESSELS).join(' | ')} (default: bud)
+  -l, --layout <name>   auto | vase | bed (default: auto)
   -h, --help            show this message
 
 Examples
   vase64 encode "hello world"
-  vase64 encode -f README.md --vessel urn > readme.vase
+  vase64 encode -f README.md --layout bed > readme.vase
   vase64 decode < readme.vase
 `;
 
 /** Parse argv into a command plus its options, without pulling in a parser. */
 function parseArgs(argv) {
-  const options = { vessel: 'bud', file: null, words: [] };
+  const options = { layout: 'auto', file: null, words: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
@@ -45,9 +45,9 @@ function parseArgs(argv) {
       case '--file':
         options.file = argv[(index += 1)];
         break;
-      case '-v':
-      case '--vessel':
-        options.vessel = argv[(index += 1)];
+      case '-l':
+      case '--layout':
+        options.layout = argv[(index += 1)];
         break;
       default:
         if (arg.startsWith('-')) throw new Error(`unknown option "${arg}"`);
@@ -89,8 +89,8 @@ if (options.help) {
   process.exit(0);
 }
 
-if (!VESSELS[options.vessel]) {
-  fail(`unknown vessel "${options.vessel}" (try ${Object.keys(VESSELS).join(', ')})`, 1);
+if (!['auto', 'vase', 'bed'].includes(options.layout)) {
+  fail(`unknown layout "${options.layout}" (try auto, vase or bed)`, 1);
 }
 
 let input;
@@ -103,7 +103,7 @@ try {
 }
 
 if (command === 'encode') {
-  process.stdout.write(`${encodeToVase(input, { vessel: options.vessel })}\n`);
+  process.stdout.write(`${encodeToVase(input, { layout: options.layout })}\n`);
 } else if (command === 'decode') {
   const text = decodeVase(input);
   if (text.length === 0 && input.trim().length > 0) {

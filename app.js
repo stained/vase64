@@ -10,7 +10,6 @@ import {
   BLOOM_CHARACTERS,
   LEAVES,
   STEM_CHARACTERS,
-  VESSELS,
   base64ToVase,
   decodeBase64,
   glyphTable,
@@ -41,10 +40,7 @@ const MONOSPACE_STACK = [
   'monospace',
 ];
 
-const SAMPLE = `VASE64: base64, but it blooms.
-
-Type anything you like in here and press "Encode to vase". Every base64
-character becomes one plant, so the same text always grows the same bouquet.`;
+const SAMPLE = `base64, but it blooms.`;
 
 const $ = (id) => document.getElementById(id);
 
@@ -53,9 +49,6 @@ const dom = {
   inputLabel: $('input-label'),
   inputHint: $('input-hint'),
   input: $('input'),
-  vessel: $('vessel'),
-  breathing: $('breathing'),
-  stamp: $('stamp'),
   run: $('run'),
   sample: $('sample'),
   clear: $('clear'),
@@ -66,7 +59,6 @@ const dom = {
   magnifier: $('magnifier'),
   copy: $('copy'),
   download: $('download'),
-  gutter: $('gutter'),
   fit: $('fit'),
   zoomIn: $('zoom-in'),
   zoomOut: $('zoom-out'),
@@ -113,20 +105,14 @@ const FURNITURE_HEIGHT = 104;
 /* setup                                                                      */
 /* -------------------------------------------------------------------------- */
 
-function fillVessels() {
+function clearProtocolWarning() {
   // The dev page loads this file as a module, so reaching this function means
   // the module loaded and the page works, whatever the protocol. Clear the
   // fallback warning dev.html raised in case it did not.
   const protocolWarning = $('protocol');
   if (protocolWarning) protocolWarning.hidden = true;
 
-  for (const [key, vessel] of Object.entries(VESSELS)) {
-    const option = document.createElement('option');
-    option.value = key;
-    option.textContent = `${vessel.name} — ${vessel.blurb}`;
-    dom.vessel.append(option);
-  }
-  dom.vessel.value = 'bud';
+
 }
 
 function fillAlphabet() {
@@ -135,10 +121,11 @@ function fillAlphabet() {
 
 Legend
   bloom  ${[...BLOOM_CHARACTERS].join('  ')}   the top two bits
-  stem   ${[...STEM_CHARACTERS].join('  ')}   the middle two bits, two per plant
+  stem   ${[...STEM_CHARACTERS].join('  ')}   the middle two bits
   leaf   ${[...LEAVES].join('  ')}   the bottom two bits
-  Each plant is two rows deep. Only the bloom row carries data; the vine
-  underneath it is decoration, which is why the vase can be redrawn freely.`;
+  Each plant is five columns wide and four rows deep. Read the bloom and
+  leaves in the top row, and the aligned stem in the bottom row. Keep those
+  marks and their spacing intact. Frames and connecting stems are decoration.`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -156,19 +143,29 @@ function classOf(character) {
  * Colour a vase without letting HTML escape the art. Characters are matched
  * char-by-char, and runs are wrapped in spans so the flower reads at a glance.
  *
- * The gutter is emitted as its own block element at the start of each line: as
- * a block it takes no width in the <pre>, so switching line numbers on cannot
- * nudge the vase sideways.
  */
 function highlight(text) {
   const lines = text.split('\n');
   const parts = [];
+  let inVessel = false;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    if (hasFlowers(line)) inVessel = false;
+    if (/^\s*\.[-|]+\.\s*$/.test(line)) inVessel = true;
+    if (line.trim() === 'VASE64') {
+      parts.push(wrap(line, 'stamp'));
+      if (index < lines.length - 1) parts.push('\n');
+      continue;
+    }
+    const left = line.search(/\S/);
+    const right = line.trimEnd().length - 1;
+    let column = 0;
     let run = '';
     let runClass = null;
     for (const character of line) {
-      const name = classOf(character);
+      const interiorStem = column > left && column < right && '|/\\'.includes(character);
+      const name = inVessel && character !== ' ' ? (interiorStem ? 'stem' : 'wall') : classOf(character);
+      column += 1;
       if (name !== runClass) {
         if (run) parts.push(wrap(run, runClass));
         run = character;
@@ -183,11 +180,6 @@ function highlight(text) {
   return parts.join('');
 }
 
-/** The signature is a marker, not a plant, so it gets one clean span. */
-function markSignature(html) {
-  return html.replace(/>VASE64</g, '><span class="stamp">VASE64</span><');
-}
-
 function wrap(text, className) {
   const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return className ? `<span class="${className}">${escaped}</span>` : escaped;
@@ -197,14 +189,8 @@ function render() {
   // Decoding paints the recovered text; encoding paints the vase. Either way
   // the panel shows the thing you asked for, not an intermediate.
   const text = state.mode === 'encode' ? state.vase : state.message;
-  // `VASE64` never contains a bloom, so its O would otherwise be tinted.
-  const lines = text ? text.split('\n') : [];
-  const gutters = dom.gutter.checked
-    ? lines.map((_, index) => `<i class="gutter">${String(index + 1).padStart(3, ' ')}</i>`).join('')
-    : '';
   dom.artifact.innerHTML =
-    `<pre class="artifact__text" tabindex="0" aria-live="polite">${markSignature(highlight(text, false))}</pre>` +
-    gutters +
+    `<pre class="artifact__text" tabindex="0" aria-live="polite">${state.mode === 'encode' ? highlight(text) : wrap(text, '')}</pre>` +
     '<p class="artifact__empty" id="artifact-empty">Your vase will appear here.</p>';
   // The panel may have been swapped out from under the older references.
   dom.artText = dom.artifact.querySelector('.artifact__text');
@@ -280,9 +266,8 @@ function stageBox() {
   if (state.panelOpen && panelRect.width > 0) {
     if (panelAtBottom) {
       height -= panelRect.height;
-    } else {
-      width -= Math.min(panelRect.width + STAGE_BREATHING, rect.width * (2 / 3));
     }
+    // Desktop panel space is reserved by the artifact's CSS padding.
   }
 
   return {
@@ -398,7 +383,7 @@ function updateStats() {
   dom.stats.chars.textContent = String(source.length);
   dom.stats.bytes.textContent = String(new TextEncoder().encode(encoding ? source : showing).length);
   dom.stats.glyphs.textContent = String(
-    encoding ? state.base64.length : splitPlants(state.vase).length,
+    encoding ? state.base64.replace(/=+$/, "").length : splitPlants(state.vase).length,
   );
   dom.stats.lines.textContent = String(showing ? showing.split('\n').length : 0);
 }
@@ -419,14 +404,10 @@ function encode() {
   }
   state.message = text;
   state.base64 = bytesToBase64(text);
-  state.vase = base64ToVase(state.base64, {
-    vessel: dom.vessel.value,
-    breathingRoom: dom.breathing.checked,
-    stamp: dom.stamp.checked,
-  });
+  state.vase = base64ToVase(state.base64);
   render();
   updateStats();
-  reportVase(state.vase, state.base64.length);
+  reportVase(state.vase, state.base64.replace(/=+$/, "").length);
 }
 
 function decode() {
@@ -447,11 +428,7 @@ function decode() {
   } else {
     // Accept plain base64 too: it is the middle step, so people paste it.
     state.base64 = source.replace(/\s+/g, '').replace(/=+$/, '');
-    state.vase = base64ToVase(state.base64, {
-      vessel: dom.vessel.value,
-      breathingRoom: dom.breathing.checked,
-      stamp: dom.stamp.checked,
-    });
+    state.vase = base64ToVase(state.base64);
   }
 
   if (!state.base64) {
@@ -468,7 +445,7 @@ function decode() {
 
   render();
   updateStats();
-  const roundTrip = bytesToBase64(state.message) === state.base64;
+  const roundTrip = bytesToBase64(state.message).replace(/=+$/, '') === state.base64.replace(/=+$/, '');
   setStatus(
     roundTrip
       ? `Decoded ${state.base64.length} base64 characters back to text.`
@@ -483,7 +460,7 @@ function reportVase(vase, glyphs) {
   let bad = 0;
   for (const plant of splitPlants(lines.slice(0, examined).join('\n'))) {
     // Ask the codec, not a string comparison: a plant is readable as long as
-    // its bloom and the stem under it survived.
+    // its bloom, bloom-row leaves and aligned bottom stem survived.
     if (plant.value === -1) bad += 1;
   }
   const planted = `${glyphs} base64 characters planted`;
@@ -527,16 +504,17 @@ function setMode(mode) {
     tab.setAttribute('aria-selected', String(tab.dataset.mode === mode));
   }
   const decoding = mode === 'decode';
-  dom.inputLabel.textContent = decoding ? 'Vase' : 'Plain text';
-  dom.input.placeholder = decoding ? 'Paste a vase (or some base64)…' : 'Type something to plant…';
-  dom.run.textContent = decoding ? 'Decode vase' : 'Encode to vase';
+  dom.inputLabel.textContent = decoding ? 'Garden' : 'Plain text';
+  dom.input.placeholder = decoding ? 'Paste a vase, flower bed or base64…' : 'Type something to plant…';
+  dom.run.textContent = decoding ? 'Decode garden' : 'Grow garden';
   dom.inputHint.textContent = decoding
-    ? 'A vase in, text out. Outlines, line numbers and blank lines are ignored, and plain base64 works too.'
-    : 'Plain text in, vase out. One base64 character per plant.';
+    ? 'A vase or flower bed in, text out. Outlines, line numbers and blank lines are ignored, and plain base64 works too.'
+    : 'Plain text in, flowers out. One unpadded base64 character per plant.';
   run();
 }
 
 function run() {
+  dom.run.textContent = state.mode === 'decode' ? 'Decode garden' : 'Grow garden';
   if (state.mode === 'encode') encode();
   else decode();
 }
@@ -550,7 +528,6 @@ for (const tab of dom.tabs) {
 }
 
 dom.run.addEventListener('click', run);
-dom.gutter.addEventListener('change', render);
 
 dom.fit.addEventListener('change', () => {
   state.fit = dom.fit.checked;
@@ -580,13 +557,6 @@ if (typeof ResizeObserver === 'function') {
   new ResizeObserver(refit).observe(dom.artifact);
 }
 
-for (const control of [dom.vessel, dom.breathing, dom.stamp]) {
-  control.addEventListener('change', () => {
-    if (state.mode === 'encode') run();
-    else if (state.base64) run();
-  });
-}
-
 dom.sample.addEventListener('click', () => {
   dom.input.value = SAMPLE;
   setMode('encode');
@@ -612,7 +582,7 @@ dom.copy.addEventListener('click', async () => {
   try {
     if (!navigator.clipboard) throw new Error('clipboard unavailable');
     await navigator.clipboard.writeText(text);
-    setStatus(state.mode === 'encode' ? 'Vase copied.' : 'Text copied.', 'ok');
+    setStatus(state.mode === 'encode' ? 'Garden copied.' : 'Text copied.', 'ok');
   } catch {
     // Clipboard access can be refused; selecting the text is the fallback.
     const range = document.createRange();
@@ -679,7 +649,7 @@ addEventListener('keydown', (event) => {
 /* go                                                                         */
 /* -------------------------------------------------------------------------- */
 
-fillVessels();
+clearProtocolWarning();
 fillAlphabet();
 setPanel(true);
 state.monospaced = ensureMonospaced();
