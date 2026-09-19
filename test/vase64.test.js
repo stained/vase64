@@ -230,8 +230,12 @@ test('an empty payload still renders a vessel', () => {
   const vase = encodeToVase('');
   assert.equal(vaseToBase64(vase), '');
   assert.equal(decodeVase(vase), '');
-  assert.ok(vase.includes('_____')); // the pot is still there
-  assert.ok(!/[oO*@]/.test(vase)); // with nothing growing in it
+  // The pot is still drawn - a rim, a water line and a base - but nothing is
+  // growing in it, so there is not a single bloom anywhere.
+  assert.ok(vase.includes('\\') && vase.includes('/'), 'the pot outline');
+  assert.ok(vase.includes('~'), 'the water line');
+  assert.ok(vase.includes('_'), 'the base');
+  assert.ok(!/[oO*@]/.test(vase), 'nothing growing');
   const report = inspectVase(vase);
   assert.equal(report.glyphs, 0);
   assert.equal(report.ok, false); // an empty vase holds no message

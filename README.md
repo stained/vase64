@@ -126,9 +126,18 @@ text ──UTF-8──▶ bytes ──base64──▶ A–Za–z0–9+/ ──pl
 deleted entirely, and the message survives — the tests prove that by decoding a
 vase with the vase outline stripped off.
 
-A longer message buys a wider vase, which in turn fits more plants per row, so
+### The garden is a dome
+
+A longer message buys a wider vase, which in turn fits more plants per rack, so
 a few hundred bytes of text still reads as a bouquet instead of one endless
-column.
+column. The racks also narrow towards the top on a softened sine curve, so the
+bouquet finishes in a rounded dome rather than a flat-topped slab — and a
+narrow rack is centred in the bed, which is what rounds the sides.
+
+The reading order stays row-major (left to right, bottom rack to top) no matter
+what the silhouette does, which is what keeps the decode unambiguous. The
+planner picks the smallest dome that holds the message, so the garden stays in
+proportion to the text rather than growing into one tall column.
 
 ### Vessels are curves, not pictures
 

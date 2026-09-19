@@ -1413,15 +1413,73 @@ function buildVaseRow(row, width, natural) {
 }
 
 const BED = Object.freeze({
-  /** One glyph plus a column of elbow room. */
+  /** One plant plus a column of elbow room. */
   min: CELL_COLUMNS + 2,
   /** Where a short message stops growing the vase. */
   default: 25,
-  /** Hard ceiling, in columns, for the whole canvas. */
+  /** Hard ceiling, in columns, for the whole garden. */
   max: 121,
-  /** How much bed each extra row of flowers buys. */
-  perRow: 2,
+  /** How much wider the garden gets for each extra rack of plants. */
+  perRack: 4,
+  /** Beyond this the bouquet stops being a bouquet and becomes a field. */
+  maxRacks: 36,
 });
+
+/**
+ * How many plants a dome of `racks` rows can hold, and how wide that garden is.
+ *
+ * Each rack is one plant tall and holds as many plants as it is wide. The
+ * racks narrow towards the top on a quarter sine, so the bouquet finishes in a
+ * dome; a straight taper would give a pyramid, which reads as a stack of
+ * shelves. A garden with more racks is also given a wider base, so a long
+ * message spreads out rather than growing into one very tall column.
+ */
+function gardenPlan(racks) {
+  const bedWidth = Math.min(BED.max, BED.default + (racks - 1) * BED.perRack);
+  const capacity = Math.max(1, Math.floor(bedWidth / CELL_COLUMNS));
+  let total = 0;
+  const racks_ = [];
+  for (let rack = 0; rack < racks; rack += 1) {
+    const t = racks === 1 ? 1 : rack / (racks - 1);
+    // A sine hump, then softened by a power below 1: a pure sine gives a
+    // pointed top, and raising it flattens the shoulders so the bouquet reads
+    // as rounded rather than as a cone.
+    const hump = Math.pow(Math.sin((Math.PI / 2) * (1 - t)), 0.45);
+    // Two columns minimum: a rack of one is a lone stalk standing above the
+    // rest, which reads as a mistake rather than as the top of a bouquet.
+    const columns = Math.max(2, Math.round(capacity * hump));
+    racks_.push(columns);
+    total += columns;
+  }
+  return { bedWidth, racks: racks_, capacity: total };
+}
+
+/**
+ * Fit `count` plants into the smallest dome that will hold them, and hand back
+ * the racks to draw. Only the racks that ended up in use are returned, and the
+ * last one is trimmed to the plants that are left.
+ */
+function planGarden(count) {
+  if (count === 0) return { bedWidth: BED.min, racks: [] };
+  for (let racks = 1; racks <= BED.maxRacks; racks += 1) {
+    const plan = gardenPlan(racks);
+    if (plan.capacity < count) continue;
+    const used = [];
+    let planted = 0;
+    for (const columns of plan.racks) {
+      if (planted >= count) break;
+      const take = Math.min(columns, count - planted);
+      used.push(take);
+      planted += take;
+    }
+    return { bedWidth: plan.bedWidth, racks: used };
+  }
+  // Long past the point of being readable as a garden: full-width racks keep it
+  // lossless even if it stops looking like a bouquet.
+  const capacity = Math.max(1, Math.floor(BED.max / CELL_COLUMNS));
+  const racks = new Array(Math.ceil(count / capacity)).fill(capacity);
+  return { bedWidth: BED.max, racks };
+}
 
 /**
  * Turn base64 text into an ASCII vase.
@@ -1454,38 +1512,32 @@ function base64ToVase(base64, options = {}) {
   const natural = vessel.naturalWidth;
   const rim = rows[vessel.pour];
 
-  // The flower bed is the canvas everything else is measured against. It grows
-  // with the message, which both keeps a big bouquet from becoming a single
-  // endless column and widens the vase it is poured into.
-  const rowsWanted = Math.ceil(values.length / CELL_COLUMNS);
-  const bedWidth = Math.max(
-    BED.min,
-    Math.min(BED.default + Math.max(0, rowsWanted - 1) * BED.perRow, BED.max),
-  );
-  const columns = Math.max(1, Math.floor(bedWidth / CELL_COLUMNS));
-  // One column of vase on either side: the bouquet overhangs its rim the way a
-  // real one does, and the widest rows still line up under it. An odd canvas
-  // width has a single centre column, which is what lets every row of the vase
-  // centre on the same axis exactly.
-  const evenBed = bedWidth + 2;
-  const width = evenBed % 2 === 1 ? evenBed : evenBed + 1;
+  // The garden is a stack of racks. Each rack is one plant tall and holds as
+  // many plants as it is wide, and the racks get narrower towards the top so
+  // the bouquet finishes in a dome rather than a flat-topped slab. The reading
+  // order stays row-major - left to right, bottom rack to top - which is what
+  // keeps the decode unambiguous however the silhouette moves.
+  const plan = planGarden(values.length);
+  const bedWidth = plan.bedWidth;
+  const width = bedWidth + 2;
   // The garden is centred on the vase's axis as a whole block, not row by row:
   // a grid only lines up if every row starts in the same column. Flooring the
-  // half-column keeps an even-width grid and an odd-width vase on the identical
-  // centre column.
-  const leftPad = Math.max(
-    0,
-    Math.floor((width - 1) / 2 - (bedWidth - 1) / 2),
-  );
+  // half-column keeps an even-width grid and an oddly wide vase on the
+  // identical centre column.
+  const leftPad = Math.max(0, Math.floor((width - 1) / 2 - (bedWidth - 1) / 2));
   const place = (content) => ' '.repeat(leftPad) + content;
 
   const lines = [];
-  const plantRows = Math.ceil(values.length / columns);
-  for (let rack = 0; rack < plantRows; rack += 1) {
-    const slice = values.slice(rack * columns, (rack + 1) * columns);
+  let planted = 0;
+  for (const columns of plan.racks) {
+    const slice = values.slice(planted, planted + columns);
+    planted += slice.length;
+    const rackWidth = columns * CELL_COLUMNS;
+    // A narrow rack is centred in the bed, which is what rounds the top.
+    const inset = Math.floor((bedWidth - rackWidth) / 2);
     for (let cellRow = 0; cellRow < CELL_ROWS; cellRow += 1) {
       const across = slice.map((value) => GLYPHS[value][cellRow]).join('');
-      lines.push(place(across.padEnd(bedWidth)).trimEnd());
+      lines.push(place(' '.repeat(inset) + across).trimEnd());
     }
   }
 
