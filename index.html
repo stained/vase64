@@ -855,17 +855,28 @@ function base64Value(character) {
 /* glyph table                                                                */
 /* -------------------------------------------------------------------------- */
 
-/** Column layout of a glyph: three leaf slots and the two stems between them. */
-const GLYPH_COLUMNS = 5;
-
-/** The four stems, in the order their codes are assigned. */
-const STEMS = ['|', '!', ':', "'"];
+/**
+ * A plant is a cell six columns wide and four rows tall:
+ *
+ *      row 0   the bloom, with a leaf on each side     <- carries the value
+ *      row 1   foliage
+ *      row 2   a node, where the branches meet
+ *      row 3   the stem, rooted in the vase
+ *
+ * The bloom sits in the middle of the cell and the stem directly under it, so
+ * plants in adjacent cells never overlap and a bloom is always the only bloom
+ * anywhere near its own column.
+ */
+const CELL_COLUMNS = 5;
+const CELL_ROWS = 4;
+/** Columns the bloom row is drawn across, leaving a gap between plants. */
+const CELL_CONTENT = 5;
 
 /** The four blooms, in the order their codes are assigned: the tiers grow. */
 const BLOOMS = ['o', 'O', '*', '@'];
 
-/** Stems are grouped in pairs, selected by bits 2-3. */
-const STEM_STYLES = [['|', ':'], ['!', '|'], [':', '|'], ['!', "'"]];
+/** The four stems, in the order their codes are assigned. */
+const STEMS = ['|', '!', ':', "'"];
 
 /** Leaf slots, indexed by bits 0-1. */
 const LEAF_MODES = [
@@ -876,13 +887,34 @@ const LEAF_MODES = [
 ];
 
 /**
- * Every character a plant row may contain. The vase is drawn only from lines
- * (`|` `\` `/` `_`), so any row with exactly one bloom and two stems is a
- * plant row and everything else in it is foliage. Only the bloom row carries
- * data; the vine below it is decoration.
+ * The two rows under the bloom, indexed by stem style: a node where the
+ * branches meet, then the foliage hanging off it. Both are six columns wide
+ * with the stem's own column blank, because the stem is written in afterwards
+ * - that is what keeps it lined up with the bloom two rows above.
+ */
+/** The column of a cell the stem is drawn in, from the bloom to the root. */
+const STEM_COLUMN = 2;
+/**
+ * The two rows between the bloom and the root, indexed by stem style: a node
+ * where the branches meet, then the foliage hanging off it. Each is a six
+ * column pattern with column 3 left blank, because the stem is stamped into
+ * that column afterwards so it lines up with the bloom above.
+ */
+const STEM_DECORATION = [
+  { node: '  |  ', foliage: '  |  ' },
+  { node: ' --+ ', foliage: ' --!-' },
+  { node: '  :  ', foliage: '  :  ' },
+  { node: "  '  ", foliage: "  '  " },
+];
+
+/**
+ * Every character a plant may contain. The vase is drawn only from lines
+ * (`|` `\\` `/` `_`), so a row with a bloom and a stem is a plant row and
+ * anything else in it is foliage. Blooms and stems never overlap, which is what
+ * makes a row readable at all.
  */
 const LEAVES = '/\\';
-const PLANT_ALPHABET = `${BLOOMS.join('')}${STEMS.join('')}${LEAVES}`;
+const PLANT_ALPHABET = `${BLOOMS.join('')}${STEMS.join('')}${LEAVES}-+`;
 
 /**
  * The character sets a plant is built from, as strings, for callers that want
@@ -893,14 +925,59 @@ const PLANT_ALPHABET = `${BLOOMS.join('')}${STEMS.join('')}${LEAVES}`;
 const BLOOM_CHARACTERS = BLOOMS.join('');
 const STEM_CHARACTERS = STEMS.join('');
 
+/**
+ * Build one plant. The value is read as three independent 2-bit fields, which
+ * is what makes the 64 glyphs a bijection onto the base64 alphabet:
+ *
+ *   bits 4-5  bloom     o O * @
+ *   bits 2-3  stem      | ! : '
+ *   bits 0-1  leaves    none, left, right, both
+ *
+ * A cell is five columns wide and four rows tall. Every row is built by
+ * writing into a fixed array rather than by counting spaces in a template:
+ *
+ *      row 0   /  |  o  |              bloom row, carries the value
+ *      row 1   /     \             the leaves, wider than the bloom
+ *      row 2      --+--                a node where the branches meet
+ *      row 3      |                    the stem, rooted in the vase
+ *
+ * The bloom sits in column 2 and the stem directly under it in the same
+ * column, so the reader can always find one from the other.
+ */
 function buildGlyph(value) {
   const bloom = BLOOMS[(value >> 4) & 0b11];
+  const style = (value >> 2) & 0b11;
+  const stem = STEMS[style];
   const leaf = LEAF_MODES[value & 0b11];
-  const [left, right] = STEM_STYLES[(value >> 2) & 0b11];
-  return [`${leaf.left}${left}${bloom}${right}${leaf.right}`, ` ${left} ${right} `];
+  const decoration = STEM_DECORATION[style];
+
+  // Every row is assembled from its columns, so the bloom and the stem beneath
+  // it land in the same one without any counting of spaces.
+  const row = (fills) => {
+    const cells = new Array(CELL_COLUMNS).fill(' ');
+    for (const [column, character] of Object.entries(fills)) cells[column] = character;
+    return cells.join('');
+  };
+
+  // The stem is drawn in one column - STEM_COLUMN - from the bloom down to the
+  // root, so the reader can find the two from each other. The decoration rows
+  // are stamped over that column rather than the other way round.
+  const stamped = (pattern) => {
+    const cells = [...pattern];
+    cells[STEM_COLUMN] = stem;
+    return cells.join('');
+  };
+
+  return [
+    // A single stem, with the bloom sitting on top of it in the same column.
+    row({ 0: leaf.left, [STEM_COLUMN]: bloom, 4: leaf.right }),
+    row({ 0: leaf.left, [STEM_COLUMN]: stem, 4: leaf.right }),
+    stamped(decoration.node),
+    stamped(decoration.foliage),
+  ];
 }
 
-/** value (0-63) -> the two rows of its plant, top row first. */
+/** value (0-63) -> the four rows of its plant, bloom row first. */
 const GLYPHS = Array.from({ length: 64 }, (_, value) => buildGlyph(value));
 
 /** The 64 glyphs joined as one string, used to spot structural collisions. */
@@ -908,61 +985,55 @@ const GLYPH_SIGNATURES = GLYPHS.map((glyph) => glyph.join('\n'));
 
 const GLYPH_LOOKUP = new Map(GLYPHS.map((glyph, value) => [glyph.join('\n'), value]));
 const BLOOM_LOOKUP = new Map(BLOOMS.map((bloom, index) => [bloom, index]));
-// Each stem position carries its own two bits, so both positions have to be
-// read back before the pair can be turned into a style index: the table above
-// uses all four combinations (`|:` `!|` `:|` `!;`), and no linear combination
-// of two two-bit digits can invert that. Reading the pair through a table also
-// keeps `|o:` from collapsing into `!o:`.
 const STEM_LOOKUP = new Map(STEMS.map((stem, index) => [stem, index]));
-const STEM_PAIRS = new Map(
-  STEM_STYLES.map(([left, right], index) => [`${left}${right}`, index]),
-);
-const stemFromPair = (left, right) => {
-  const style = STEM_PAIRS.get(`${STEMS[left]}${STEMS[right]}`);
-  return style === undefined ? -1 : style;
-};
 
 /**
- * Read a pair of rows back into a 6-bit value.
- * @returns {number} 0-63, or -1 when the rows are not a glyph.
+ * Read a plant back into a 6-bit value.
+ *
+ * A cell can be given as its four rows (an array) or as one string, in which
+ * case newlines separate the rows. Only the first row and the stem row are
+ * consulted, because those are the two the writer controls.
+ *
+ * @returns {number} 0-63, or -1 when this is not a plant.
  */
-function glyphToValue(topRow, bottomRow = '') {
-  const exact = GLYPH_LOOKUP.get(`${topRow}\n${bottomRow}`);
+function glyphToValue(cell) {
+  const rows = Array.isArray(cell) ? cell : String(cell).split('\n');
+  const exact = GLYPH_LOOKUP.get(rows.slice(0, CELL_ROWS).join('\n'));
   if (exact !== undefined) return exact;
-  return glyphToValueLenient(topRow);
+  return glyphToValueLenient(cell);
 }
 
 /**
- * Recover a value from a glyph whose leaves have been retouched or whose
- * gutter collapsed. Blooms carry bits 4-5 (they are unique per glyph), stems
- * carry bits 2-3, leaves are decorative enough to survive being mangled.
+ * Recover a value from a plant whose decoration has been retouched or whose
+ * lower rows were trimmed away.
+ *
+ * Blooms carry bits 4-5 and are unique per glyph; the stem carries bits 2-3 and
+ * stands directly underneath the bloom, so it survives a trimmed vine. Leaves
+ * are decoration and only have to be present enough to read bits 0-1.
  *
  * @returns {number} 0-63, or -1 when no bloom / stem can be found.
  */
-function glyphToValueLenient(row = '') {
-  let bloomIndex = -1;
-  const stems = [];
-  for (const character of row) {
-    const bloom = BLOOM_LOOKUP.get(character);
-    if (bloom !== undefined) {
-      if (bloomIndex !== -1) return -1; // two blooms in one row: not a glyph
-      bloomIndex = bloom;
-      continue;
-    }
-    if (STEM_LOOKUP.has(character)) stems.push(STEM_LOOKUP.get(character));
-  }
-  if (bloomIndex === -1 || stems.length !== 2) return -1;
-  const leaves = leafModeFromRow(row);
+function glyphToValueLenient(cell) {
+  const rows = Array.isArray(cell) ? cell : String(cell).split('\n');
+  const bloomRow = rows[0] ?? '';
+  const stemRow = rows[CELL_ROWS - 1] ?? '';
+
+  // Exactly one bloom, and the same stem character on both sides of it.
+  const bloomAt = bloomRow.search(/[oO*@]/);
+  if (bloomAt === -1) return -1;
+  if (/[oO*@]/.test(bloomRow.slice(bloomAt + 1))) return -1;
+  // The stem is directly under the bloom: one column, no guessing. Rows are
+  // normalised by `tidyVase` before they get here, so the two always line up.
+  const style = STEM_LOOKUP.get(stemRow[bloomAt]);
+  if (style === undefined) return -1;
+
+  const leaves = leafModeFromRow(bloomRow, bloomAt);
   if (leaves === -1) return -1;
-  const style = stemFromPair(stems[0], stems[1]);
-  if (style === -1) return -1;
-  return (bloomIndex << 4) | (style << 2) | leaves;
+  return (BLOOM_LOOKUP.get(bloomRow[bloomAt]) << 4) | (style << 2) | leaves;
 }
 
-/** Bits 0-1 as read off the leaves surrounding the bloom. */
-function leafModeFromRow(row) {
-  const bloomAt = row.search(/[oO*@]/);
-  if (bloomAt === -1) return -1;
+/** Bits 0-1 as read off the leaves beside the bloom. */
+function leafModeFromRow(row, bloomAt) {
   const left = row.slice(0, bloomAt).includes('/');
   const right = row.slice(bloomAt + 1).includes('\\');
   if (left && right) return 0b11;
@@ -971,10 +1042,9 @@ function leafModeFromRow(row) {
   return 0b00;
 }
 
-/** Is this line the top half of a plant? */
+/** Is this the bloom row of a plant? */
 function isPlantRow(line = '') {
-  const planted = countPlants(line);
-  return planted.blooms === 1 && planted.stems === 2;
+  return countPlants(line).blooms === 1;
 }
 
 /** Count the blooms and stems on a line. */
@@ -982,7 +1052,6 @@ function countPlants(line = '') {
   let blooms = 0;
   let stems = 0;
   for (const character of line) {
-    if (character === ' ') continue;
     if (BLOOM_LOOKUP.has(character)) blooms += 1;
     else if (STEM_LOOKUP.has(character)) stems += 1;
   }
@@ -990,8 +1059,8 @@ function countPlants(line = '') {
 }
 
 /**
- * Does this line carry flowers? Only bloom rows do - the stem rows under them
- * are decoration, and the vase has no blooms at all.
+ * Does this line carry flowers? Only bloom rows do - the rows beneath them are
+ * the rest of the plant, and the vase has no blooms at all.
  */
 function hasFlowers(line = '') {
   for (const character of line) {
@@ -1001,49 +1070,36 @@ function hasFlowers(line = '') {
 }
 
 /**
- * Split a flower row into individual glyphs.
+ * Find every plant in a vase.
  *
- * A row of flowers is a field, not a single plant: it packs as many glyphs as
- * fit. Each bloom anchors one glyph - the stem before it, the two stems after
- * it, and the leaves those stems carry - so a leaf overhanging from the next
- * plant is picked up by that plant instead of confusing this one.
+ * A bloom anchors a plant and is never ambiguous: the stem is directly beneath
+ * it, the leaves are beside it, and no other bloom is within a cell of it. The
+ * decoration rows are carried along so a caller can show or redraw the whole
+ * plant, but the value comes from the bloom row and the stem.
  *
- * @returns {Array<string>} one glyph per plant, left to right.
+ * @param {string} text the whole vase
+ * @returns {Array<{row: number, column: number, rows: string[], value: number}>}
  */
-function splitGlyphs(row = '') {
-  const glyphs = [];
-  let cursor = 0;
-  while (cursor < row.length) {
-    const bloomAt = findBloom(row, cursor);
-    if (bloomAt === -1) break;
-    const leftStem = findStemBefore(row, bloomAt, cursor);
-    if (leftStem === -1) {
-      cursor = bloomAt + 1;
-      continue;
+function splitPlants(text = '') {
+  const lines = String(text).split('\n');
+  const plants = [];
+  for (let row = 0; row < lines.length; row += 1) {
+    const line = lines[row];
+    for (let column = 0; column < line.length; column += 1) {
+      if (!BLOOM_LOOKUP.has(line[column])) continue;
+      // Two blooms this close together cannot both be plants.
+      if (line.slice(column + 1, column + CELL_COLUMNS).match(/[oO*@]/)) continue;
+      // The cell starts STEM_COLUMN columns to the left of the bloom, so the
+      // rows come back in the same shape the writer built them in.
+      const left = column - STEM_COLUMN;
+      const rows = [];
+      for (let step = 0; step < CELL_ROWS; step += 1) {
+        rows.push((lines[row + step] ?? '').slice(left, left + CELL_COLUMNS));
+      }
+      plants.push({ row, column: left, rows, value: glyphToValueLenient(rows) });
     }
-    // Every glyph is exactly GLYPH_COLUMNS wide, so the left stem fixes both
-    // edges: one column for the leaf to its left, and the bloom two along.
-    const start = Math.max(cursor, leftStem - 1);
-    glyphs.push(row.slice(start, start + GLYPH_COLUMNS));
-    cursor = start + GLYPH_COLUMNS;
   }
-  return glyphs;
-}
-
-/** Index of the next bloom at or after `from`, or -1. */
-function findBloom(row, from) {
-  for (let index = from; index < row.length; index += 1) {
-    if (BLOOM_LOOKUP.has(row[index])) return index;
-  }
-  return -1;
-}
-
-/** Index of the stem belonging to the bloom at `bloomAt`, or -1. */
-function findStemBefore(row, bloomAt, from) {
-  for (let index = bloomAt - 1; index >= from; index -= 1) {
-    if (STEM_LOOKUP.has(row[index])) return index;
-  }
-  return -1;
+  return plants;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1358,7 +1414,7 @@ function buildVaseRow(row, width, natural) {
 
 const BED = Object.freeze({
   /** One glyph plus a column of elbow room. */
-  min: GLYPH_COLUMNS + 2,
+  min: CELL_COLUMNS + 2,
   /** Where a short message stops growing the vase. */
   default: 25,
   /** Hard ceiling, in columns, for the whole canvas. */
@@ -1401,40 +1457,36 @@ function base64ToVase(base64, options = {}) {
   // The flower bed is the canvas everything else is measured against. It grows
   // with the message, which both keeps a big bouquet from becoming a single
   // endless column and widens the vase it is poured into.
-  const rowsWanted = Math.ceil(values.length / GLYPH_COLUMNS);
+  const rowsWanted = Math.ceil(values.length / CELL_COLUMNS);
   const bedWidth = Math.max(
     BED.min,
     Math.min(BED.default + Math.max(0, rowsWanted - 1) * BED.perRow, BED.max),
   );
-  const columns = Math.max(1, Math.floor(bedWidth / GLYPH_COLUMNS));
+  const columns = Math.max(1, Math.floor(bedWidth / CELL_COLUMNS));
   // One column of vase on either side: the bouquet overhangs its rim the way a
   // real one does, and the widest rows still line up under it. An odd canvas
   // width has a single centre column, which is what lets every row of the vase
   // centre on the same axis exactly.
   const evenBed = bedWidth + 2;
   const width = evenBed % 2 === 1 ? evenBed : evenBed + 1;
-  // Flowers are placed on that same axis, not against their own left edge.
-  // Flooring the half-column is what keeps an even-width row of flowers and an
-  // odd-width vase row on the identical centre column.
-  const axis = (width - 1) / 2;
-  const place = (content) =>
-    ' '.repeat(Math.max(0, Math.floor(axis - (content.length - 1) / 2))) + content;
+  // The garden is centred on the vase's axis as a whole block, not row by row:
+  // a grid only lines up if every row starts in the same column. Flooring the
+  // half-column keeps an even-width grid and an odd-width vase on the identical
+  // centre column.
+  const leftPad = Math.max(
+    0,
+    Math.floor((width - 1) / 2 - (bedWidth - 1) / 2),
+  );
+  const place = (content) => ' '.repeat(leftPad) + content;
 
   const lines = [];
-  for (let start = 0; start < values.length; start += columns) {
-    const chunk = values.slice(start, start + columns);
-    const top = [];
-    const bottom = [];
-    for (const value of chunk) {
-      const glyph = GLYPHS[value];
-      top.push(glyph[0]);
-      bottom.push(glyph[1]);
+  const plantRows = Math.ceil(values.length / columns);
+  for (let rack = 0; rack < plantRows; rack += 1) {
+    const slice = values.slice(rack * columns, (rack + 1) * columns);
+    for (let cellRow = 0; cellRow < CELL_ROWS; cellRow += 1) {
+      const across = slice.map((value) => GLYPHS[value][cellRow]).join('');
+      lines.push(place(across.padEnd(bedWidth)).trimEnd());
     }
-    // `place` centres each row on the vase's axis, which is what makes a short
-    // final row finish the bouquet instead of leaning to one side. Adding any
-    // padding here as well would centre it twice and push it off-axis.
-    lines.push(place(top.join('')).trimEnd());
-    lines.push(place(bottom.join('')).trimEnd());
   }
 
   if (config.breathingRoom && values.length > 0) lines.push('');
@@ -1447,7 +1499,8 @@ function base64ToVase(base64, options = {}) {
   if (config.stamp) {
     lines.push('');
     const signature = 'VASE64';
-    lines.push(place(signature));
+    const centred = Math.max(0, Math.floor((width - 1) / 2 - (signature.length - 1) / 2));
+    lines.push(' '.repeat(centred) + signature);
   }
   return lines.join('\n');
 }
@@ -1464,13 +1517,10 @@ function base64ToVase(base64, options = {}) {
  */
 function vaseToBase64(vase) {
   if (typeof vase !== 'string') throw new TypeError('vaseToBase64 expects a string');
+  const cleaned = tidyVase(vase);
   let base64 = '';
-  for (const rawLine of vase.split(/\r?\n/)) {
-    const line = stripGutter(rawLine).replace(/\s+$/, '');
-    for (const glyph of splitGlyphs(line)) {
-      const value = glyphToValueLenient(glyph);
-      if (value !== -1) base64 += BASE64_ALPHABET[value];
-    }
+  for (const plant of splitPlants(cleaned)) {
+    if (plant.value !== -1) base64 += BASE64_ALPHABET[plant.value];
   }
   return base64;
 }
@@ -1478,6 +1528,37 @@ function vaseToBase64(vase) {
 /** Drop a leading `12 | ` gutter when one is present. */
 function stripGutter(line) {
   return line.replace(/^\s*\d+\s*[|│]\s?/, '');
+}
+
+/**
+ * Prepare a pasted vase for reading: drop line numbers, trailing spaces and
+ * blank lines.
+ *
+ * Runs of spaces are deliberately left alone. The art uses a three-space gap
+ * *inside* every cell, which is indistinguishable from a stretched gap between
+ * cells, so squeezing one would break the other. Whitespace that has been
+ * doubled on its way here cannot be recovered, and the reader says so rather
+ * than guessing.
+ */
+function tidyVase(vase) {
+  const lines = String(vase)
+    .split(/\r?\n/)
+    .map((line) => stripGutter(line.replace(/\r$/, '')).replace(/\s+$/, ''));
+
+  // Blank lines inside the garden would fall between a plant's bloom and the
+  // stem three rows below it, cutting the plant in half. Blank lines after the
+  // last plant are left alone - that is the gap before the vase.
+  const lastPlanted = lines.reduce(
+    (last, line, index) => (/[oO*@|:!']/.test(line) ? index : last),
+    -1,
+  );
+  const kept = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === '' && index > lastPlanted) kept.push('');
+    else if (line !== '') kept.push(line);
+  }
+  return kept.join('\n');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1519,28 +1600,17 @@ function countGlyphs(vase) {
  */
 function inspectVase(vase) {
   const problems = [];
+  const plants = splitPlants(tidyVase(vase ?? ''));
   let glyphs = 0;
-  const lines = String(vase ?? '').split(/\r?\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = stripGutter(lines[index]).replace(/\s+$/, '');
-    if (!hasFlowers(line)) continue;
-    const found = splitGlyphs(line);
-    if (found.length === 0) {
-      problems.push({ line: index + 1, message: 'carries a bloom but no complete plant' });
-      continue;
+  for (const plant of plants) {
+    if (plant.value === -1) {
+      problems.push({
+        line: plant.row + 1,
+        message: `could not read a 6-bit value from the plant at column ${plant.column + 1}`,
+      });
+    } else {
+      glyphs += 1;
     }
-    let readable = 0;
-    for (const glyph of found) {
-      if (glyphToValueLenient(glyph) === -1) {
-        problems.push({
-          line: index + 1,
-          message: `could not read a 6-bit value from ${JSON.stringify(glyph)}`,
-        });
-      } else {
-        readable += 1;
-      }
-    }
-    glyphs += readable;
   }
   return { ok: problems.length === 0 && glyphs > 0, glyphs, problems };
 }
@@ -1942,7 +2012,7 @@ function updateStats() {
   dom.stats.chars.textContent = String(source.length);
   dom.stats.bytes.textContent = String(new TextEncoder().encode(encoding ? source : showing).length);
   dom.stats.glyphs.textContent = String(
-    encoding ? state.base64.length : splitGlyphs(state.vase).length,
+    encoding ? state.base64.length : splitPlants(state.vase).length,
   );
   dom.stats.lines.textContent = String(showing ? showing.split('\n').length : 0);
 }
@@ -2025,13 +2095,10 @@ function reportVase(vase, glyphs) {
   const lines = vase.split('\n');
   const examined = Math.min(lines.length, 400);
   let bad = 0;
-  for (let index = 0; index < examined; index += 1) {
-    if (!hasFlowers(lines[index])) continue;
-    for (const glyph of splitGlyphs(lines[index])) {
-      // Ask the codec, not a string comparison: a final plant in a row can be
-      // trimmed by a trailing space and still be perfectly readable.
-      if (glyphToValueLenient(glyph) === -1) bad += 1;
-    }
+  for (const plant of splitPlants(lines.slice(0, examined).join('\n'))) {
+    // Ask the codec, not a string comparison: a plant is readable as long as
+    // its bloom and the stem under it survived.
+    if (plant.value === -1) bad += 1;
   }
   const planted = `${glyphs} base64 characters planted`;
   if (!state.monospaced) {

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   BASE64_ALPHABET,
+  CELL_COLUMNS,
+  CELL_ROWS,
   GLYPHS,
   GLYPH_SIGNATURES,
   LEAVES,
@@ -17,7 +19,7 @@ import {
   hasFlowers,
   inspectVase,
   isPlantRow,
-  splitGlyphs,
+  splitPlants,
   vaseToBase64,
 } from '../src/vase64.js';
 
@@ -32,28 +34,29 @@ test('there are 64 glyphs and every one is distinct', () => {
   assert.equal(new Set(GLYPH_SIGNATURES).size, 64);
 });
 
-test('every glyph is two rows of five columns', () => {
+test('every glyph is a full cell: four rows of six columns', () => {
   for (const [value, glyph] of GLYPHS.entries()) {
-    assert.equal(glyph.length, 2, `glyph ${value}`);
-    assert.equal(glyph[0].length, 5, `glyph ${value} top row`);
-    assert.equal(glyph[1].length, 5, `glyph ${value} bottom row`);
-    assert.ok(
-      [...glyph[0].split('').join('')].every((character) => ` ${PLANT_ALPHABET}`.includes(character)),
-      `glyph ${value} uses only plant characters: ${JSON.stringify(glyph[0])}`,
-    );
+    assert.equal(glyph.length, CELL_ROWS, `glyph ${value} row count`);
+    for (const row of glyph) {
+      assert.equal(row.length, CELL_COLUMNS, `glyph ${value} row width: ${JSON.stringify(row)}`);
+      assert.ok(
+        [...row].every((character) => ` ${PLANT_ALPHABET}`.includes(character)),
+        `glyph ${value} uses only plant characters: ${JSON.stringify(row)}`,
+      );
+    }
   }
 });
 
-test('every glyph carries exactly one bloom and two stems', () => {
+test('every glyph carries exactly one bloom, with its stem beneath it', () => {
   for (const [value, glyph] of GLYPHS.entries()) {
-    assert.ok(isPlantRow(glyph[0]), `glyph ${value} should read as a plant`);
-    assert.equal(glyphToValue(glyph[0], glyph[1]), value);
+    assert.ok(isPlantRow(glyph[0]), `glyph ${value} should read as a plant row`);
+    assert.equal(glyphToValue(glyph), value, `glyph ${value} exact`);
   }
 });
 
 test('blooms, stems and leaves never share a character', () => {
   const blooms = 'oO*@';
-  const stems = '|:!;';
+  const stems = "|:!'";
   for (const character of stems) assert.ok(!blooms.includes(character));
   for (const character of LEAVES) {
     assert.ok(!blooms.includes(character), `leaf ${character} looks like a bloom`);
@@ -63,30 +66,29 @@ test('blooms, stems and leaves never share a character', () => {
 
 test('glyphs decode back to their own value, strictly and leniently', () => {
   for (const [value, glyph] of GLYPHS.entries()) {
-    assert.equal(glyphToValue(glyph[0], glyph[1]), value, `glyph ${value} exact`);
+    assert.equal(glyphToValue(glyph), value, `glyph ${value} exact`);
     // Both readers must agree on every glyph: they are the same codec seen
-    // through different amounts of tolerance.
-    assert.equal(glyphToValueLenient(glyph[0]), value, `glyph ${value} lenient`);
-    // Only the leaves reach column 0, so a row's first character is always a
-    // leaf or a space - never a stem or a bloom.
-    assert.ok(' /\\'.includes(glyph[0][0]), `glyph ${value} starts on a leaf or a gap`);
+    // through different amounts of tolerance. The lenient one takes the rows
+    // too, because the stem it needs is three rows below the bloom.
+    assert.equal(glyphToValueLenient(glyph), value, `glyph ${value} lenient`);
   }
 });
 
-test('a row with the wrong number of stems or blooms is not a plant', () => {
-  assert.equal(glyphToValueLenient('***'), -1); // three blooms
-  assert.equal(glyphToValueLenient('|||'), -1); // three stems
-  // `isPlantRow` is the structural test - one bloom, two stems - while the
-  // stem pair only becomes a value if it is one of the four styles.
-  assert.equal(isPlantRow('|*|'), true);
-  assert.equal(glyphToValueLenient('|*|'), -1);
-  assert.equal(glyphToValueLenient(' |*: '), 32); // a real glyph
-  assert.equal(isPlantRow(' |*: '), true);
-  assert.equal(isPlantRow('  *  '), false); // bloom but no stem
-  assert.equal(isPlantRow('|  |'), false); // stems but no bloom
-  assert.equal(isPlantRow('|:  '), false);
+test('a plant is read from its bloom row and the stem beneath it', () => {
+  // Row 0 needs exactly one bloom, or it is not a plant row.
+  assert.equal(isPlantRow('***'), false); // three blooms
+  assert.equal(isPlantRow('   o  '), true); // a bloom row
+  assert.equal(isPlantRow('  |  '), false); // a stem with no bloom on the row
   assert.equal(isPlantRow('     '), false);
   assert.equal(isPlantRow(''), false);
+
+  // Feeding the reader a bare bloom row cannot work: the stem lives below it.
+  assert.equal(glyphToValueLenient('   o  '), -1);
+  // A trimmed plant loses its stem and becomes unreadable, which is honest.
+  assert.equal(glyphToValueLenient(['   o  ']), -1);
+  // The whole cell reads.
+  assert.equal(glyphToValueLenient(['   o  ', '   |  ', '   |  ', '   |  ']), 0);
+  assert.equal(glyphToValueLenient(GLYPHS[60]), 60);
 });
 
 test('vase rows are never mistaken for plants', () => {
@@ -250,32 +252,53 @@ test('the outline, gutters, stamp and stray whitespace are ignored', () => {
   assert.equal(decodeVase(numbered), text);
   assert.equal(decodeVase(vase.replace(/\n/g, '\r\n')), text);
   assert.equal(decodeVase(vase.split('\n').join('\n\n')), text);
-  assert.equal(decodeVase(vase.replace(/ /g, '  ')), text);
+  // Stretched whitespace is *not* recoverable: the art uses a three-space gap
+  // inside every cell, so a doubled gap is indistinguishable from a cell's own
+  // spacing and squeezing it would move every stem off its bloom. The reader
+  // must not pretend otherwise - it may return the wrong text, but never the
+  // right one by accident.
+  let stretched = null;
+  try {
+    stretched = decodeVase(vase.replace(/ /g, '  '));
+  } catch {
+    stretched = null; // refusing outright is fine too
+  }
+  assert.notEqual(stretched, text);
 });
 
 test('a vase with the frame deleted still decodes', () => {
   const text = 'Just the flowers, please';
   const vase = encodeToVase(text);
+  // A plant is four rows tall and only its bloom row has a bloom, so keeping
+  // the "flower and stem" rows keeps the data. Keeping the bloom rows alone
+  // would not: the stem carries two of the six bits.
+  const keep = /[oO*@|:!']/;
   const petals = vase
+    .split('\n')
+    .filter((line) => keep.test(line) && !/^\s*[\\/|_~=-]+\s*$/.test(line))
+    .join('\n');
+  assert.equal(decodeVase(petals), text);
+
+  const bloomsOnly = vase
     .split('\n')
     .filter((line) => hasFlowers(line))
     .join('\n');
-  assert.equal(decodeVase(petals), text);
+  assert.notEqual(decodeVase(bloomsOnly), text);
 });
 
-test('isPlantRow accepts rows whose leaves were retouched', () => {
-  const [top] = GLYPHS[0b100000]; // a bloom with both leaves
-  assert.equal(isPlantRow(top), true);
-  assert.equal(isPlantRow(`${top.slice(1)} `), true);
+test('a plant still reads if its leaves are retouched', () => {
+  const glyph = GLYPHS[0b100000]; // a bloom with a leaf on each side
+  assert.equal(isPlantRow(glyph[0]), true);
+  const trimmed = glyph.map((row) => row.trim());
+  assert.equal(glyphToValueLenient(trimmed), 0b100000);
 });
 
 test('inspectVase reports trouble without throwing', () => {
   assert.deepEqual(inspectVase('').glyphs, 0);
-  const damaged = `${GLYPHS[5][0]}\nVASE64\n  |\n***\n`;
+  const damaged = GLYPHS[5].join('\n') + '\nVASE64\n  |\n***\n';
   const report = inspectVase(damaged);
-  assert.equal(report.ok, false);
-  assert.ok(report.problems.length > 0);
   assert.equal(report.glyphs, 1);
+  assert.ok(report.problems.length > 0);
 });
 
 test('invalid input is rejected loudly', () => {

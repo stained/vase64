@@ -14,9 +14,8 @@ import {
   base64ToVase,
   decodeBase64,
   glyphTable,
-  glyphToValueLenient,
   hasFlowers,
-  splitGlyphs,
+  splitPlants,
   vaseToBase64,
 } from './src/vase64.js';
 
@@ -399,7 +398,7 @@ function updateStats() {
   dom.stats.chars.textContent = String(source.length);
   dom.stats.bytes.textContent = String(new TextEncoder().encode(encoding ? source : showing).length);
   dom.stats.glyphs.textContent = String(
-    encoding ? state.base64.length : splitGlyphs(state.vase).length,
+    encoding ? state.base64.length : splitPlants(state.vase).length,
   );
   dom.stats.lines.textContent = String(showing ? showing.split('\n').length : 0);
 }
@@ -482,13 +481,10 @@ function reportVase(vase, glyphs) {
   const lines = vase.split('\n');
   const examined = Math.min(lines.length, 400);
   let bad = 0;
-  for (let index = 0; index < examined; index += 1) {
-    if (!hasFlowers(lines[index])) continue;
-    for (const glyph of splitGlyphs(lines[index])) {
-      // Ask the codec, not a string comparison: a final plant in a row can be
-      // trimmed by a trailing space and still be perfectly readable.
-      if (glyphToValueLenient(glyph) === -1) bad += 1;
-    }
+  for (const plant of splitPlants(lines.slice(0, examined).join('\n'))) {
+    // Ask the codec, not a string comparison: a plant is readable as long as
+    // its bloom and the stem under it survived.
+    if (plant.value === -1) bad += 1;
   }
   const planted = `${glyphs} base64 characters planted`;
   if (!state.monospaced) {

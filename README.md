@@ -103,22 +103,28 @@ text ──UTF-8──▶ bytes ──base64──▶ A–Za–z0–9+/ ──pl
    | Bits | Field | Options |
    | --- | --- | --- |
    | 4–5 | bloom | `o` `O` `*` `@` (the tiers grow) |
-   | 2–3 | stem | `\|:` `!\|` `:\|` `!'` |
+   | 2–3 | stem | `\|` `!` `:` `'` |
    | 0–1 | leaves | none, `/`, `\`, or both |
 
-   That is 4 × 4 × 4 = 64 distinct plants, which is exactly the size of the
-   base64 alphabet, so the mapping is a bijection. A plant is five columns
-   wide and two rows tall:
+   That is 4 × 4 × 4 = 64 distinct plants, exactly the size of the base64
+   alphabet, so the mapping is a bijection. A plant occupies a cell five
+   columns wide and four rows tall:
 
    ```
-    leaf  stem  bloom  stem  leaf     <- the bloom row carries the value
-      .   stem    .    stem    .      <- the vine makes it a plant
+       /  o  \        row 0  the bloom, with a leaf on each side   <- the value
+       /  |  \        row 1  the leaves
+         -!+           row 2  a node where the branches meet
+         -!!-          row 3  the stem, rooted in the vase
    ```
 
-Only the bloom row is ever read back, so the vine underneath each plant is pure
-decoration. **Nothing about the vase itself carries data.** It can be widened,
-redrawn, or deleted entirely, and the message survives — the tests prove that
-by decoding a vase with the frame stripped off.
+   The bloom sits in column 2 and the stem is drawn directly beneath it in the
+   same column, which is what lets the reader find one from the other. Only
+   those two carry data: the leaf rows and the node are decoration that make it
+   look like a plant rather than a tile.
+
+**Nothing about the vase itself carries data.** It can be widened, redrawn, or
+deleted entirely, and the message survives — the tests prove that by decoding a
+vase with the vase outline stripped off.
 
 A longer message buys a wider vase, which in turn fits more plants per row, so
 a few hundred bytes of text still reads as a bouquet instead of one endless
